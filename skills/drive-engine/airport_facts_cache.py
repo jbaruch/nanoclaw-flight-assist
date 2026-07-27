@@ -109,6 +109,11 @@ def load_static_facts() -> dict[int, StaticAirport]:
         return {}
     airports = payload.get("airports")
     if not isinstance(airports, dict):
+        print(
+            f"[drive-engine] airport-facts cache {path} `airports` is not a JSON "
+            "object; refetching",
+            file=sys.stderr,
+        )
         return {}
     facts: dict[int, StaticAirport] = {}
     for raw_id, entry in airports.items():

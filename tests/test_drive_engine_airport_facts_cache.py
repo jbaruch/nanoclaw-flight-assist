@@ -92,6 +92,15 @@ def test_future_version_degrades_to_empty_not_raises(facts_env, capsys):
     assert "schema_version" in capsys.readouterr().err
 
 
+def test_airports_not_a_dict_degrades_with_diagnostic(facts_env, capsys):
+    facts_env.write_text(
+        json.dumps({"schema_version": AIRPORT_FACTS_SCHEMA_VERSION, "airports": []}),
+        encoding="utf-8",
+    )
+    assert load_static_facts() == {}
+    assert "`airports` is not a JSON object" in capsys.readouterr().err
+
+
 def test_malformed_entries_dropped_wellformed_kept(facts_env):
     facts_env.write_text(
         json.dumps(

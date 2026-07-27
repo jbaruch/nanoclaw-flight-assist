@@ -461,10 +461,14 @@ def finish_sweep(
     BEFORE `apply` is called, so a shadow run cannot touch the calendar.
 
     LIVE: gives apply a FIXED write-phase budget (`_APPLY_PHASE_BUDGET_SECONDS`),
-    independent of how long the plan phase took, so the write phase stops with
-    margin before the host precheck kill and defers the rest to the next
-    idempotent sweep (#164). Decoupling from plan elapsed is the #211 fix — the
-    old `budget - elapsed` starved apply to 0 whenever planning ran long."""
+    independent of how long the plan phase took, so the write phase bounds its own
+    duration and defers the rest to the next idempotent sweep (#164). This bounds
+    the WRITE phase, not the whole sweep: on a warm sweep the total stays under
+    the host precheck kill, but a long cold plan plus this budget can still exceed
+    it — the mid-apply kill is idempotent-safe (deferred ops drain next sweep) and
+    jbaruch/nanoclaw#890 tracks real headroom. Decoupling from plan elapsed is the
+    #211 fix — the old `budget - elapsed` starved apply to 0 when planning ran
+    long."""
     if _shadow_mode():
         print(render_plan(plan), file=sys.stderr)
         for line in skipped:
