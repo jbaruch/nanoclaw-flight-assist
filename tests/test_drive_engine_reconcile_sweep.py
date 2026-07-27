@@ -30,6 +30,7 @@ from flight_identity import TRIPIT, Flight  # noqa: E402
 from maps_client import MapsError, TravelTime  # noqa: E402
 from reconcile import Create, Delete, DesiredBlock, ReconcilePlan  # noqa: E402
 from reconcile_sweep import (  # noqa: E402
+    AirportUnresolved,
     ResolvedAirport,
     _make_airport_resolver,
     _near_term_departure_airport_ids,
@@ -380,12 +381,12 @@ def test_resolve_byair_failure_falls_back_to_cached_static():
     assert new_static is None
 
 
-def test_resolve_miss_with_byair_failure_skips_flight():
-    """A first-seen airport whose byAir fetch fails resolves to None — the flight
-    is skipped this sweep and retried next (idempotent)."""
-    resolved, new_static = _resolve_one_airport(static=None, want_delay=False, fetch=lambda: None)
-    assert resolved is None
-    assert new_static is None
+def test_resolve_miss_with_byair_failure_raises_fail_closed():
+    """A first-seen airport whose byAir fetch fails RAISES `AirportUnresolved` —
+    never a None that would drop the flight and orphan-delete its block. The whole
+    sweep fails closed and retries next cycle (#211 review)."""
+    with pytest.raises(AirportUnresolved):
+        _resolve_one_airport(static=None, want_delay=False, fetch=lambda: None)
 
 
 def test_resolve_none_iata_context_not_persisted():
@@ -456,29 +457,31 @@ def test_resolver_warm_hit_makes_no_fetch_and_stays_clean():
     assert dirty() is False
 
 
-def test_resolver_byair_miss_returns_none_and_stays_clean():
-    """A first-seen airport whose fetch fails resolves to None, memoizes the miss,
-    and never marks the cache dirty (no bogus fact persisted)."""
+def test_resolver_byair_miss_raises_fail_closed():
+    """A first-seen airport whose fetch fails propagates `AirportUnresolved` out of
+    the resolver — the sweep fails closed rather than dropping the flight and
+    orphan-deleting its block (#211 review). No fact is persisted."""
     fetch, calls = _counting_fetch({})  # id 9 absent → fetch returns None
     resolve, dirty = _make_airport_resolver(
         static_facts={}, near_term_dep_ids=set(), fetch_ctx=fetch
     )
-    assert resolve(9) is None
-    assert resolve(9) is None
-    assert calls == [9]  # the miss is memoized, not re-attempted this sweep
+    with pytest.raises(AirportUnresolved):
+        resolve(9)
+    assert calls == [9]
     assert dirty() is False
 
 
 def test_near_term_departure_ids_selects_within_window_only():
     """Only byAir departures within `_DELAY_FRESHNESS_WINDOW` of now get a delay
-    refresh; past, far-future, and unparseable ones are excluded (#211)."""
-    now = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+    refresh; past, far-future, and unparseable ones are excluded (#211). Fixed
+    past fixture dates relative to the injected `now` (per testing-standards)."""
+    now = datetime(2020, 7, 10, 12, 0, tzinfo=UTC)
     records = [
-        {"dep_airport_id": 1, "scheduled_dep_time": "2026-07-27T18:00:00+00:00"},  # in 6h → in
-        {"dep_airport_id": 2, "scheduled_dep_time": "2026-07-30T12:00:00+00:00"},  # 3d → out
-        {"dep_airport_id": 3, "scheduled_dep_time": "2026-07-27T06:00:00+00:00"},  # past → out
+        {"dep_airport_id": 1, "scheduled_dep_time": "2020-07-10T18:00:00+00:00"},  # in 6h → in
+        {"dep_airport_id": 2, "scheduled_dep_time": "2020-07-13T12:00:00+00:00"},  # 3d → out
+        {"dep_airport_id": 3, "scheduled_dep_time": "2020-07-10T06:00:00+00:00"},  # past → out
         {"dep_airport_id": 4, "scheduled_dep_time": "not-a-date"},  # unparseable → out
-        {"scheduled_dep_time": "2026-07-27T13:00:00+00:00"},  # no dep id → out
+        {"scheduled_dep_time": "2020-07-10T13:00:00+00:00"},  # no dep id → out
     ]
     assert _near_term_departure_airport_ids(records, now) == {1}
 
@@ -486,8 +489,8 @@ def test_near_term_departure_ids_selects_within_window_only():
 def test_near_term_departure_ids_excludes_naive_timestamps():
     """A tz-naive `scheduled_dep_time` can't be safely compared to the aware now,
     so it is excluded rather than guessed."""
-    now = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
-    records = [{"dep_airport_id": 9, "scheduled_dep_time": "2026-07-27T13:00:00"}]
+    now = datetime(2020, 7, 10, 12, 0, tzinfo=UTC)
+    records = [{"dep_airport_id": 9, "scheduled_dep_time": "2020-07-10T13:00:00"}]
     assert _near_term_departure_airport_ids(records, now) == set()
 
 

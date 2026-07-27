@@ -507,6 +507,21 @@ class _AirportCtx(Protocol):
     def timezone(self) -> str | None: ...
 
 
+class AirportUnresolved(Exception):
+    """A first-seen (uncached) airport could not be resolved because byAir was
+    unavailable.
+
+    Propagates to `main`'s fail-closed boundary so the WHOLE sweep skips cleanly
+    rather than building a PARTIAL plan (#211 review). A dropped flight's airport
+    leg would be absent from `desired`, and `reconcile.plan_reconcile` deletes any
+    unified block with no matching desired leg as an orphan — so a byAir outage
+    during a cache miss would delete live drive blocks. This is the "no partial
+    plan" invariant #172 guarded with the old plan budget; failing closed on an
+    unresolvable airport preserves it without a wall-clock deadline. A byAir
+    failure where the static facts ARE cached does not raise — it degrades to the
+    cached facts (no live delay), which is strictly safe."""
+
+
 def _resolve_one_airport(
     *,
     static: StaticAirport | None,
@@ -516,17 +531,20 @@ def _resolve_one_airport(
     """Pure resolution policy for one airport (#211). Returns
     `(resolved, new_static)`:
 
-    - `resolved` is the `ResolvedAirport`, or None when it can't be resolved this
-      sweep (a cache miss whose byAir fetch also failed) — the flight is skipped
-      and retried next sweep.
+    - `resolved` is the `ResolvedAirport`. It is None only for a resolved-but-
+      IATA-less context (a successful byAir response carrying no IATA code) — the
+      caller skips just that flight. A cache miss whose byAir fetch FAILS instead
+      raises `AirportUnresolved` (fail closed — never a partial plan).
     - `new_static` is a `StaticAirport` the caller should persist when this call
       learned a fresh real IATA (differing from `static`), else None.
 
     A warm static hit that needs no delay is served with ZERO fetches. Otherwise
     `fetch()` performs the byAir round trip (returning None on failure); the live
     `delay.index` is carried only when `want_delay`, and never persisted (it is
-    not static). A None-IATA context is a transient miss — never cached, or it
-    would pin the flight unresolvable forever."""
+    not static). A byAir failure degrades to the cached static facts when we have
+    them (safe — airport still resolved, only the live nudge lost); with no cache
+    it raises `AirportUnresolved`. A None-IATA context is a transient miss — never
+    cached, or it would pin the flight unresolvable forever."""
     if static is not None and not want_delay:
         return (
             ResolvedAirport(
@@ -543,7 +561,7 @@ def _resolve_one_airport(
                 ),
                 None,
             )
-        return (None, None)
+        raise AirportUnresolved("byAir unavailable resolving a first-seen airport")
     resolved = ResolvedAirport(
         iata=ctx.code,
         flag=ctx.flag,
@@ -567,8 +585,9 @@ def _make_airport_resolver(
     """Build the sweep's memoizing airport resolver + a dirty-flag reader (#211).
 
     Returns `(resolve, dirty)`: `resolve(airport_id)` yields the `ResolvedAirport`
-    (or None when unresolvable this sweep), and `dirty()` reports whether any call
-    learned a fresh static fact worth persisting.
+    (None only for a resolved-but-IATA-less context; a cache-miss byAir failure
+    raises `AirportUnresolved` to fail the sweep closed), and `dirty()` reports
+    whether any call learned a fresh static fact worth persisting.
 
     The per-sweep memo is keyed by `airport_id` ALONE, which is sufficient:
     `want_delay` is a pure function of the key (`airport_id in near_term_dep_ids`,
@@ -769,8 +788,9 @@ def _run_sweep() -> dict:
     def fetch_ctx(airport_id: int) -> _AirportCtx | None:
         # Network + exception handling lives here so the resolver policy stays
         # pure and testable. A byAir failure (timeout / not_found) resolves to
-        # None → the policy falls back to cached static facts, or skips the
-        # flight this sweep (retried next; the reconcile is idempotent).
+        # None → the policy degrades to cached static facts when it has them, or
+        # raises `AirportUnresolved` to fail the whole sweep closed (never a
+        # partial plan — a dropped flight's block would be orphan-deleted).
         try:
             return airport_context(byair.get_airport(airport_id))
         except (ByAirError, urllib.error.URLError):

@@ -85,7 +85,7 @@ Tolerance — **hint, not authority** (the deliberate opposite of `skip-state.js
 - A **missing**, **unreadable/corrupt**, **non-object**, or **future-versioned** file all resolve to an **empty map** — the sweep re-fetches from byAir this cycle, exactly the pre-cache behaviour. Nothing raises; a diagnostic goes to stderr for anything but a plain missing file. A stale-vs-fresh static fact costs only latency, never a wrong block, so failing closed (as the skip store does) would be the wrong trade.
 - Malformed individual entries (missing/empty `iata`, non-object value, non-integer key) are dropped; a well-formed remainder is still returned.
 
-Migration: `schema_version` `1` is the initial version. Because a future version reads as no-usable-prior-state (refetch, non-disruptive), a newer writer's file survives untouched until this reader is upgraded — no fail-closed refusal is needed (`coding-policy: stateful-artifacts`, Cross-Pipeline Schema Bumps).
+Migration: `schema_version` `1` is the initial version. Because a future version reads as no-usable-prior-state (refetch, non-disruptive), a newer writer's file survives untouched until this reader is upgraded — no fail-closed refusal is needed (`coding-policy: stateful-artifacts`, Cross-Pipeline Schema Bumps). The refetch is non-disruptive even when byAir is also down: a cache-miss airport that byAir can't resolve makes `reconcile_sweep._resolve_one_airport` raise `AirportUnresolved`, failing the whole sweep closed rather than building a partial plan that would orphan-delete live blocks (#211). So the empty-map fallback never escalates work — it costs at most one slow (or skipped) sweep, never a wrong or deleted block.
 
 ## Calendar-as-State: Drive Blocks
 

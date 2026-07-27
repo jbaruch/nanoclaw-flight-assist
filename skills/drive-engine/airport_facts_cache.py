@@ -101,6 +101,11 @@ def load_static_facts() -> dict[int, StaticAirport]:
         # "no usable prior state" and refetch (safe, non-disruptive: costs one
         # slow sweep, never a wrong block). A newer writer's file survives
         # untouched until this reader is upgraded (`stateful-artifacts`).
+        #
+        # The refetch is safe even if byAir is ALSO down: a cache-miss airport
+        # that byAir can't resolve makes `reconcile_sweep._resolve_one_airport`
+        # raise `AirportUnresolved`, failing the whole sweep closed rather than
+        # building a partial plan that would orphan-delete live blocks (#211).
         print(
             f"[drive-engine] airport-facts cache {path} schema_version {version!r} "
             f"!= {AIRPORT_FACTS_SCHEMA_VERSION}; refetching this sweep",
