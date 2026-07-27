@@ -95,9 +95,12 @@ _SWEEP_MAPS_TIMEOUT_SECONDS = 4.0
 # Per-call timeout for the sweep's byAir client (the shared default is 30s). The
 # watchdog against a hung `get_airport`: on a cache miss the sweep resolves each
 # first-seen airport over the network, so an unbounded call could run to the host
-# kill. A timed-out airport resolves to None → that flight is skipped this cycle
-# and retried next sweep (idempotent). Warm sweeps hit the persisted static-facts
-# cache and make no byAir call at all (#211).
+# kill. A timed-out fetch is handled by `_resolve_one_airport`: it degrades to the
+# cached static facts when they exist (only the live delay nudge is lost), or —
+# with no cache — raises `AirportUnresolved` to fail the WHOLE sweep closed rather
+# than drop the flight into a partial plan. Either way the cycle retries next
+# sweep (idempotent). Warm sweeps hit the persisted static-facts cache and make no
+# byAir call at all (#211).
 _SWEEP_BYAIR_TIMEOUT_SECONDS = 6.0
 
 # How close to departure a flight must be for the sweep to refresh its departure
@@ -644,6 +647,24 @@ def _near_term_departure_airport_ids(records: list[dict], now: datetime) -> set[
     return ids
 
 
+def _persist_static_facts_best_effort(static_facts: dict[int, StaticAirport]) -> None:
+    """Persist the airport-facts cache, swallowing write errors (#211 review).
+
+    The cache is a latency-only hint — a failed write must NEVER abort an
+    otherwise-valid sweep. This runs before the apply phase, so letting an OSError
+    (disk full, permission, read-only mount) propagate to `main`'s fail-closed
+    catch would skip applying a good plan over a broken hint. Log to stderr (fail
+    visibly) and continue; a later sweep re-persists."""
+    try:
+        store_static_facts(static_facts)
+    except OSError as exc:
+        print(
+            f"[drive-engine] could not persist airport-facts cache ({exc}); "
+            "continuing — it is a latency hint, retried next sweep",
+            file=sys.stderr,
+        )
+
+
 def _run_sweep() -> dict:
     """Run the live unified reconcile and return the stdout payload.
 
@@ -791,7 +812,14 @@ def _run_sweep() -> dict:
         # partial plan — a dropped flight's block would be orphan-deleted).
         try:
             return airport_context(byair.get_airport(airport_id))
-        except (ByAirError, urllib.error.URLError):
+        except (ByAirError, urllib.error.URLError) as exc:
+            # Fail visibly: a one-line diagnostic so an operator can tell a
+            # transient byAir outage / timeout from a genuinely unknown airport
+            # id, without changing the degrade-or-fail-closed behaviour above.
+            print(
+                f"[drive-engine] byAir get_airport({airport_id}) failed ({exc})",
+                file=sys.stderr,
+            )
             return None
 
     resolve_airport, static_facts_dirty = _make_airport_resolver(
@@ -828,9 +856,10 @@ def _run_sweep() -> dict:
 
     skipped = list(result.skipped) + list(meeting_skipped)
 
-    # Persist any newly-resolved static airport facts for the next warm sweep.
+    # Persist any newly-resolved static airport facts for the next warm sweep —
+    # best-effort, never a gate on applying a valid plan (see helper).
     if static_facts_dirty():
-        store_static_facts(static_facts)
+        _persist_static_facts_best_effort(static_facts)
 
     return finish_sweep(
         result.plan,

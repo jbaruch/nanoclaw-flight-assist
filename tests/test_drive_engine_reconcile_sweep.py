@@ -34,6 +34,7 @@ from reconcile_sweep import (  # noqa: E402
     ResolvedAirport,
     _make_airport_resolver,
     _near_term_departure_airport_ids,
+    _persist_static_facts_best_effort,
     _resolve_one_airport,
     build_plan,
     make_route,
@@ -478,6 +479,27 @@ def test_resolver_byair_miss_raises_fail_closed():
         resolve(9)
     assert calls == [9]
     assert dirty() is False
+
+
+def test_persist_facts_swallows_write_error_and_warns(monkeypatch, capsys):
+    """A cache WRITE failure must not abort the sweep — the cache is a latency
+    hint, so an OSError is logged and swallowed (never propagated to main()'s
+    fail-closed catch, which would skip applying a valid plan) (#213 review)."""
+
+    def boom(_facts):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(reconcile_sweep, "store_static_facts", boom)
+    _persist_static_facts_best_effort({})  # must not raise
+    assert "could not persist airport-facts cache" in capsys.readouterr().err
+
+
+def test_persist_facts_calls_store_on_happy_path(monkeypatch, capsys):
+    saved = []
+    monkeypatch.setattr(reconcile_sweep, "store_static_facts", lambda facts: saved.append(facts))
+    _persist_static_facts_best_effort({3: StaticAirport(iata="JFK")})
+    assert saved == [{3: StaticAirport(iata="JFK")}]
+    assert capsys.readouterr().err == ""  # silent on success
 
 
 def test_near_term_departure_ids_selects_within_window_only():
