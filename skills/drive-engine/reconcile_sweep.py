@@ -81,8 +81,8 @@ _SHADOW_TRUTHY = frozenset({"1", "true", "yes", "on"})
 # the plan phase took — the old `budget - plan_elapsed` formula starved apply to
 # 0 whenever planning ran long (#211). A cold sweep (many first-seen airports)
 # can push plan_elapsed + this past the current 30s host kill; the mid-apply kill
-# is idempotent-safe (deferred ops drain next sweep) and jbaruch/nanoclaw tracks
-# a per-skill precheck-timeout override for real headroom.
+# is idempotent-safe (deferred ops drain next sweep) and jbaruch/nanoclaw#890
+# tracks a per-skill precheck-timeout override for real headroom.
 _APPLY_PHASE_BUDGET_SECONDS = 20.0
 
 # Per-call timeout for the sweep's own maps client (the shared default is 10s).

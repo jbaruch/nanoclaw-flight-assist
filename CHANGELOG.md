@@ -10,7 +10,7 @@ The write phase keeps its bound but no longer starves: `finish_sweep` gives `app
 
 **Cross-sweep static airport-facts cache** (`airport_facts_cache.py`): IATA / country flag / IANA timezone are immutable, so they now persist to `airport-facts.json` and a warm sweep resolves known airports with zero byAir calls — cutting the dominant plan-phase cost to ~0. byAir's live `delay.index` congestion nudge is not cached; the sweep refreshes it only for departures within 24h, where it still moves the block. The cache is a hint, not authority: a missing, corrupt, or future-versioned file degrades to a refetch, never a raise (the deliberate opposite of the skip store's fail-closed read).
 
-The host-side precheck kill (`SCRIPT_TIMEOUT_MS`, 30s, in the `jbaruch/nanoclaw` agent-runner) is a separate layer — a cold sweep can still exceed it, though the mid-apply kill is idempotent-safe. A per-skill precheck-timeout override for real headroom is tracked in `jbaruch/nanoclaw`.
+The host-side precheck kill (`SCRIPT_TIMEOUT_MS`, 30s, in the `jbaruch/nanoclaw` agent-runner) is a separate layer — a cold sweep can still exceed it, though the mid-apply kill is idempotent-safe. A per-skill precheck-timeout override for real headroom is tracked in jbaruch/nanoclaw#890.
 
 ## 0.2.66 — 2026-07-21
 
