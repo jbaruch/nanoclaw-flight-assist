@@ -122,6 +122,28 @@ def test_malformed_entries_dropped_wellformed_kept(facts_env):
 
 
 @pytest.mark.usefixtures("facts_env")
+def test_load_normalizes_padded_and_empty_strings(facts_env):
+    """A hand-edited / partly-corrupt cache is normalized on read (strip; empty →
+    None), matching `airport_context._as_str`, so `'JFK '` / `''` never reach
+    routing or block creation."""
+    facts_env.write_text(
+        json.dumps(
+            {
+                "schema_version": AIRPORT_FACTS_SCHEMA_VERSION,
+                "airports": {
+                    "3": {"iata": " JFK ", "flag": "", "tz": "  America/New_York "},
+                    "4": {"iata": "   ", "flag": "🇺🇸", "tz": "X"},  # blank iata → dropped
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_static_facts() == {
+        3: StaticAirport(iata="JFK", flag=None, timezone="America/New_York")
+    }
+
+
+@pytest.mark.usefixtures("facts_env")
 def test_store_overwrites_prior_cache():
     store_static_facts({3: StaticAirport(iata="JFK")})
     store_static_facts({4: StaticAirport(iata="BNA")})

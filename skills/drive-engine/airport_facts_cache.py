@@ -66,6 +66,13 @@ def _facts_path() -> Path:
     return state_dir() / _FACTS_FILE
 
 
+def _clean_str(value: object) -> str | None:
+    """Strip a string value to its non-empty core, else None — matching
+    `airport_context._as_str` so a cached fact reads back the same shape byAir
+    would have produced (no whitespace padding, no empty strings)."""
+    return value.strip() or None if isinstance(value, str) else None
+
+
 def load_static_facts() -> dict[int, StaticAirport]:
     """Return the persisted `{airport_id: StaticAirport}` map, or `{}` when there
     is no usable cache.
@@ -128,15 +135,16 @@ def load_static_facts() -> dict[int, StaticAirport]:
             continue
         if not isinstance(entry, dict):
             continue
-        iata = entry.get("iata")
-        if not isinstance(iata, str) or not iata:
+        # Normalize like `airport_context._as_str` (strip; empty → None) so a
+        # hand-edited or partially-corrupt cache can't propagate "JFK " or "" into
+        # routing / block creation.
+        iata = _clean_str(entry.get("iata"))
+        if iata is None:
             continue
-        flag = entry.get("flag")
-        tz = entry.get("tz")
         facts[airport_id] = StaticAirport(
             iata=iata,
-            flag=flag if isinstance(flag, str) else None,
-            timezone=tz if isinstance(tz, str) else None,
+            flag=_clean_str(entry.get("flag")),
+            timezone=_clean_str(entry.get("tz")),
         )
     return facts
 
