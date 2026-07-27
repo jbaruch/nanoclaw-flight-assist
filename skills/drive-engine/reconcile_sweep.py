@@ -30,20 +30,21 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Protocol
 
 _BUNDLE_DIR = Path(__file__).resolve().parent
 if str(_BUNDLE_DIR) not in sys.path:
     sys.path.insert(0, str(_BUNDLE_DIR))
 
+from airport_facts_cache import StaticAirport, load_static_facts, store_static_facts  # noqa: E402
 from block_codec import ParsedBlock, parse_block  # noqa: E402
 from calendar_apply import apply_plan  # noqa: E402
-from engine import AirportInfo, PlanBudgetExceeded, build_reconcile_plan  # noqa: E402
+from engine import AirportInfo, build_reconcile_plan  # noqa: E402
 from flight_mask import flight_codes, is_flight_event, known_flight_codes  # noqa: E402
 from meeting_source import exclude_drive_block_events, meeting_desired_blocks  # noqa: E402
 from normalize import flight_from_byair  # noqa: E402
@@ -66,44 +67,56 @@ SWEEP_WINDOW = timedelta(days=14)
 _SHADOW_ENV = "DRIVE_ENGINE_SHADOW"
 _SHADOW_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
-# Wall-clock budget for the whole sweep. The host kills this precheck at ~33s
-# (#164); bound the write phase so `apply_plan` stops starting new ops with margin
-# for the last in-flight op + the JSON print + interpreter teardown, and returns a
-# clean payload instead of being killed mid-write. Any ops it couldn't reach are
-# `deferred` and drained on the next sweep (the reconcile is idempotent, so
-# resuming never duplicates).
-_SWEEP_WALL_CLOCK_BUDGET_SECONDS = 27.0
-
-# Wall-clock budget for the plan (routing) phase, carved out of the sweep budget
-# so the write phase still has room after it. Each airport leg can cost a slow
-# provider failover (Google ZERO_RESULTS on an airport → three sequential TomTom
-# calls), so an unbounded plan phase could route for minutes and blow past any
-# container timeout (#172). `make_route` refuses to START a new route call once
-# this budget is spent — it raises `PlanBudgetExceeded` instead, so the sweep
-# takes its clean no-wake path rather than being killed mid-route before it can
-# print JSON. On exhaustion the whole cycle skips cleanly (no partial plan — a
-# partial `desired` set reads as orphaned blocks to delete). With memoization a
-# normal itinerary never reaches this.
-_PLAN_PHASE_BUDGET_SECONDS = 15.0
+# Wall-clock budget for the APPLY (write) phase only. There is no plan-phase
+# deadline: `reconcile_sweep` is a deterministic script with no LLM to bound, so
+# a valid, fully-computed plan is never abandoned (#211 — the old 15s plan budget
+# raised `PlanBudgetExceeded` on a good plan and froze the calendar for days).
+# The plan phase runs to completion, bounded only by the per-call network
+# timeouts below.
+#
+# The write phase still needs a bound: the host kills this precheck at ~30s
+# (#164, SCRIPT_TIMEOUT_MS in the agent-runner), so `apply_plan` stops STARTING
+# new ops once this budget is spent, returns a clean payload, and defers the rest
+# to the next (idempotent) sweep. This is a FIXED budget, decoupled from how long
+# the plan phase took — the old `budget - plan_elapsed` formula starved apply to
+# 0 whenever planning ran long (#211). A cold sweep (many first-seen airports)
+# can push plan_elapsed + this past the current 30s host kill; the mid-apply kill
+# is idempotent-safe (deferred ops drain next sweep) and jbaruch/nanoclaw#890
+# tracks a per-skill precheck-timeout override for real headroom.
+_APPLY_PHASE_BUDGET_SECONDS = 20.0
 
 # Per-call timeout for the sweep's own maps client (the shared default is 10s).
-# Tightened so a single `travel_time` — worst case one Google call plus three
-# sequential TomTom fallback calls — cannot outlast the margin between the plan
-# budget and the host precheck kill: a call that begins just before the budget
-# elapses finishes in ≤ 4 × 4s = 16s, so 15s + 16s ≈ 31s stays under the ~33s
-# kill and the clean no-wake JSON is always emitted first. A leg that times out is
-# skipped this cycle and retried next sweep (the reconcile is idempotent).
+# The real watchdog against a hung provider now that there is no plan deadline: a
+# single `travel_time` — worst case one Google call plus three sequential TomTom
+# fallback calls — is bounded to ≤ 4 × 4s = 16s. A leg that times out is skipped
+# this cycle and retried next sweep (the reconcile is idempotent).
 _SWEEP_MAPS_TIMEOUT_SECONDS = 4.0
+
+# Per-call timeout for the sweep's byAir client (the shared default is 30s). The
+# watchdog against a hung `get_airport`: on a cache miss the sweep resolves each
+# first-seen airport over the network, so an unbounded call could run to the host
+# kill. A timed-out fetch is handled by `_resolve_one_airport`: it degrades to the
+# cached static facts when they exist (only the live delay nudge is lost), or —
+# with no cache — raises `AirportUnresolved` to fail the WHOLE sweep closed rather
+# than drop the flight into a partial plan. Either way the cycle retries next
+# sweep (idempotent). Warm sweeps hit the persisted static-facts cache and make no
+# byAir call at all (#211).
+_SWEEP_BYAIR_TIMEOUT_SECONDS = 6.0
+
+# How close to departure a flight must be for the sweep to refresh its departure
+# airport's live `delay.index` congestion nudge from byAir. Outside this window
+# the nudge is noise (byAir's delay index is a near-term signal) and the airport
+# resolves from the static-facts cache with no network call; inside it, the sweep
+# pays one `get_airport` to keep the departure-clearance buffer honest (#211).
+_DELAY_FRESHNESS_WINDOW = timedelta(hours=24)
 
 
 def make_route(
     maps,
     *,
     cache: dict[tuple[str, str], timedelta | None] | None = None,
-    deadline: float | None = None,
-    clock: Callable[[], float] = time.monotonic,
 ) -> RouteFn:
-    """A memoizing, budget-aware `route(origin, destination) -> timedelta | None`.
+    """A memoizing `route(origin, destination) -> timedelta | None`.
 
     Per `MapsClient`'s own contract ("cache aggressively at the caller level"),
     dedupes identical (origin, destination) pairs within one sweep — an airport
@@ -112,11 +125,10 @@ def make_route(
     same answer the provider would return again (#172). A failed route caches None
     too, so a dead endpoint isn't re-attempted every leg.
 
-    When `deadline` (a `clock()` reading) is set, a cache MISS past the deadline
-    raises `PlanBudgetExceeded` BEFORE the network call — a single leg's provider
-    fallback chain can't push the sweep past its budget after the per-leg poll
-    already passed (#172). A cache HIT is free and always served, even past the
-    deadline. `clock` is injected for deterministic tests.
+    There is no routing deadline: the plan phase runs to completion (#211).
+    Runaway routing is bounded instead by the maps client's per-call timeout
+    (`_SWEEP_MAPS_TIMEOUT_SECONDS`) — a hung provider fails the single leg (cached
+    as None) rather than stalling the sweep.
     """
     import urllib.error
 
@@ -128,10 +140,6 @@ def make_route(
         key = (origin, destination)
         if key in memo:
             return memo[key]
-        if deadline is not None and clock() >= deadline:
-            # Deliberately no origin/destination in the message — it can be a home
-            # address or live GPS fix, and this string is printed to stderr (#172).
-            raise PlanBudgetExceeded("routing budget spent before a cache-miss route call")
         try:
             tt = maps.travel_time(origin, destination)
         except (MapsError, urllib.error.URLError, TimeoutError):
@@ -442,7 +450,6 @@ def finish_sweep(
     skipped: list[str],
     *,
     calendar,
-    elapsed: float,
     apply: Callable = apply_plan,
 ) -> dict:
     """Shadow-render or apply the plan, and return the sweep's stdout payload.
@@ -456,17 +463,27 @@ def finish_sweep(
     parses, so writing the diff there would corrupt the contract — and returns
     BEFORE `apply` is called, so a shadow run cannot touch the calendar.
 
-    LIVE: gives apply whatever of the sweep budget the fetch/plan phase left
-    (`elapsed`), so the write phase stops with margin before the host precheck
-    kill (#164)."""
+    LIVE: gives apply a FIXED write-phase budget (`_APPLY_PHASE_BUDGET_SECONDS`),
+    independent of how long the plan phase took, so the write phase bounds its own
+    duration and defers the rest to the next idempotent sweep (#164). This bounds
+    the WRITE phase, not the whole sweep: on a warm sweep the total stays under
+    the host precheck kill, but a long cold plan plus this budget can still exceed
+    it — the mid-apply kill is idempotent-safe (deferred ops drain next sweep) and
+    jbaruch/nanoclaw#890 tracks real headroom. Decoupling from plan elapsed is the
+    #211 fix — the old `budget - elapsed` starved apply to 0 when planning ran
+    long."""
     if _shadow_mode():
         print(render_plan(plan), file=sys.stderr)
         for line in skipped:
             print(f"[drive-engine] skip: {line}", file=sys.stderr)
         return build_shadow_payload(plan, skipped)
 
-    apply_budget = max(_SWEEP_WALL_CLOCK_BUDGET_SECONDS - elapsed, 0.0)
-    applied = apply(plan, calendar=calendar, calendar_id="primary", budget_seconds=apply_budget)
+    applied = apply(
+        plan,
+        calendar=calendar,
+        calendar_id="primary",
+        budget_seconds=_APPLY_PHASE_BUDGET_SECONDS,
+    )
 
     for line in skipped:
         print(f"[drive-engine] skip: {line}", file=sys.stderr)
@@ -476,6 +493,178 @@ def finish_sweep(
     return build_sweep_payload(applied, skipped)
 
 
+class _AirportCtx(Protocol):
+    """The byAir airport facts `airport_context` yields — the shape
+    `_resolve_one_airport` reads. A Protocol (not the concrete `AirportContext`)
+    so the policy stays importable without the flight-assist path and testable
+    with a plain stand-in. Read-only members so the frozen `AirportContext`
+    dataclass satisfies it."""
+
+    @property
+    def code(self) -> str | None: ...
+    @property
+    def flag(self) -> str | None: ...
+    @property
+    def delay_index(self) -> str | None: ...
+    @property
+    def timezone(self) -> str | None: ...
+
+
+class AirportUnresolved(Exception):
+    """A first-seen (uncached) airport could not be resolved to a usable IATA.
+
+    Raised when byAir was unavailable OR returned a context with no IATA code, and
+    no cached static facts exist to fall back on. Propagates to `main`'s
+    fail-closed boundary so the WHOLE sweep skips cleanly rather than building a
+    PARTIAL plan (#211 review). A dropped flight's airport leg would be absent from
+    `desired`, and `reconcile.plan_reconcile` deletes any unified block with no
+    matching desired leg as an orphan — so an unresolvable airport during a cache
+    miss would delete live drive blocks. This is the "no partial plan" invariant
+    #172 guarded with the old plan budget; failing closed preserves it without a
+    wall-clock deadline. When static facts ARE cached, no failure raises — it
+    degrades to the cached facts (no live delay), which is strictly safe."""
+
+
+def _resolved_from_static(static: StaticAirport) -> ResolvedAirport:
+    """A `ResolvedAirport` carrying only the cached immutable facts — no live
+    `delay.index`. The safe fallback whenever a live byAir fetch can't improve on
+    what the cross-sweep cache already holds."""
+    return ResolvedAirport(
+        iata=static.iata, flag=static.flag, delay_index=None, timezone=static.timezone
+    )
+
+
+def _resolve_one_airport(
+    *,
+    static: StaticAirport | None,
+    want_delay: bool,
+    fetch: Callable[[], _AirportCtx | None],
+) -> tuple[ResolvedAirport, StaticAirport | None]:
+    """Pure resolution policy for one airport (#211). Returns
+    `(resolved, new_static)`:
+
+    - `resolved` is always a valid-IATA `ResolvedAirport` — the policy never
+      returns a code-less one. When no usable live IATA is available (byAir failed
+      OR returned a context with `code is None`), it degrades to cached static
+      facts if present, else raises `AirportUnresolved` (fail closed — never a
+      partial plan that would orphan-delete a block).
+    - `new_static` is a `StaticAirport` the caller should persist when this call
+      learned a fresh real IATA (differing from `static`), else None.
+
+    A warm static hit that needs no delay is served with ZERO fetches. Otherwise
+    `fetch()` performs the byAir round trip (returning None on failure); the live
+    `delay.index` is carried only when `want_delay`, and never persisted (it is
+    not static)."""
+    if static is not None and not want_delay:
+        return _resolved_from_static(static), None
+    ctx = fetch()
+    if ctx is None or ctx.code is None:
+        # No usable live IATA — byAir failed, OR returned a code-less context.
+        # Degrade to cached static facts if we have them (safe: airport still
+        # fully resolved from cache, only the live delay nudge lost); with no
+        # cache, fail the whole sweep closed rather than drop the flight.
+        if static is not None:
+            return _resolved_from_static(static), None
+        raise AirportUnresolved("no usable IATA resolving a first-seen airport")
+    resolved = ResolvedAirport(
+        iata=ctx.code,
+        flag=ctx.flag,
+        delay_index=ctx.delay_index if want_delay else None,
+        timezone=ctx.timezone,
+    )
+    fresh = StaticAirport(iata=ctx.code, flag=ctx.flag, timezone=ctx.timezone)
+    new_static = fresh if static != fresh else None
+    return resolved, new_static
+
+
+def _make_airport_resolver(
+    *,
+    static_facts: dict[int, StaticAirport],
+    near_term_dep_ids: set[int],
+    fetch_ctx: Callable[[int], _AirportCtx | None],
+) -> tuple[Callable[[int], ResolvedAirport], Callable[[], bool]]:
+    """Build the sweep's memoizing airport resolver + a dirty-flag reader (#211).
+
+    Returns `(resolve, dirty)`: `resolve(airport_id)` yields a valid-IATA
+    `ResolvedAirport`, or raises `AirportUnresolved` to fail the sweep closed when
+    a cache-miss airport has no usable live IATA and no cached fallback; `dirty()`
+    reports whether any call learned a fresh static fact worth persisting.
+
+    The per-sweep memo is keyed by `airport_id` ALONE, which is sufficient:
+    `want_delay` is a pure function of the key (`airport_id in near_term_dep_ids`,
+    a set fixed for the whole sweep), so it is identical on every call for a given
+    airport. A cache hit therefore always carries the correct delay treatment — a
+    near-term departure's live nudge can never be skipped by a hit seeded from an
+    earlier arrival-side resolution of the same airport, since that earlier call
+    saw the same `want_delay`. `fetch_ctx` owns the network + exception handling
+    so the policy (`_resolve_one_airport`) stays pure; a repeated (origin) airport
+    costs one byAir round trip, not one per leg."""
+    memo: dict[int, ResolvedAirport] = {}
+    dirty = False
+
+    def resolve(airport_id: int) -> ResolvedAirport:
+        nonlocal dirty
+        if airport_id in memo:
+            return memo[airport_id]
+        resolved, new_static = _resolve_one_airport(
+            static=static_facts.get(airport_id),
+            want_delay=airport_id in near_term_dep_ids,
+            fetch=lambda: fetch_ctx(airport_id),
+        )
+        if new_static is not None:
+            static_facts[airport_id] = new_static
+            dirty = True
+        memo[airport_id] = resolved
+        return resolved
+
+    return resolve, lambda: dirty
+
+
+def _near_term_departure_airport_ids(records: list[dict], now: datetime) -> set[int]:
+    """Departure airport ids of byAir flights leaving within
+    `_DELAY_FRESHNESS_WINDOW` of `now`.
+
+    Only these airports get a live `delay.index` refresh from byAir; every other
+    airport resolves from the static-facts cache with no network call. A flight
+    already departed, or one whose `scheduled_dep_time` is missing or unparseable,
+    contributes nothing — a past flight needs no drive, so its congestion nudge is
+    moot (#211)."""
+    ids: set[int] = set()
+    horizon = now + _DELAY_FRESHNESS_WINDOW
+    for record in records:
+        dep_id = record.get("dep_airport_id")
+        raw = record.get("scheduled_dep_time")
+        if not isinstance(dep_id, int) or not isinstance(raw, str):
+            continue
+        try:
+            dep = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dep.tzinfo is None:
+            continue
+        if now <= dep <= horizon:
+            ids.add(dep_id)
+    return ids
+
+
+def _persist_static_facts_best_effort(static_facts: dict[int, StaticAirport]) -> None:
+    """Persist the airport-facts cache, swallowing write errors (#211 review).
+
+    The cache is a latency-only hint — a failed write must NEVER abort an
+    otherwise-valid sweep. This runs before the apply phase, so letting an OSError
+    (disk full, permission, read-only mount) propagate to `main`'s fail-closed
+    catch would skip applying a good plan over a broken hint. Log to stderr (fail
+    visibly) and continue; a later sweep re-persists."""
+    try:
+        store_static_facts(static_facts)
+    except OSError as exc:
+        print(
+            f"[drive-engine] could not persist airport-facts cache ({exc}); "
+            "continuing — it is a latency hint, retried next sweep",
+            file=sys.stderr,
+        )
+
+
 def _run_sweep() -> dict:
     """Run the live unified reconcile and return the stdout payload.
 
@@ -483,18 +672,17 @@ def _run_sweep() -> dict:
     APPLIES the plan — or, under `DRIVE_ENGINE_SHADOW`, renders it and writes
     nothing (#183). The write itself lives there, not here.
 
-    Raises `PlanBudgetExceeded` when routing (meeting or airport side, both
-    sharing the budget-aware `route`) runs past budget — `main()` maps that to the
-    clean no-wake skip. Any other exception propagates to `main()`'s fail-closed
-    boundary. Split out from `main()` so the outer-boundary contract (clean skip
-    vs. error payload vs. work payload) is unit-testable without the live I/O
-    clients (#172)."""
-    sweep_start = time.monotonic()
+    The plan phase runs to completion — no deadline (#211). Any exception
+    propagates to `main()`'s fail-closed boundary. Split out from `main()` so the
+    outer-boundary contract (error payload vs. work payload) is unit-testable
+    without the live I/O clients (#172)."""
+    import urllib.error
+
     _on_path("flight-assist")
     _on_path("travel-core")
 
     from airport_drive_inputs import airport_context
-    from byair_client import ByAirClient
+    from byair_client import ByAirClient, ByAirError
     from calendar_reconcile import _find_events_args, _items
     from fetch_events import CalendarFetcher
     from google_calendar_client import GoogleCalendarClient
@@ -531,16 +719,11 @@ def _run_sweep() -> dict:
     schedule = load_travel_schedule()
 
     maps = MapsClient.from_env(timeout=_SWEEP_MAPS_TIMEOUT_SECONDS)
-    # Deadline for the routing phase, so a slow provider-failover storm can't run
-    # routing for minutes (#172).
-    plan_deadline = sweep_start + _PLAN_PHASE_BUDGET_SECONDS
-
-    # One memoizing, budget-aware route closure for the whole sweep — meeting legs
-    # and airport legs share it, so a repeated (origin, destination) pair costs one
-    # provider round trip, not one per leg. It serves cached pairs even past the
-    # deadline but refuses to START a new (cache-miss) route call once the deadline
-    # passes, raising PlanBudgetExceeded instead (#172).
-    route = make_route(maps, deadline=plan_deadline, clock=time.monotonic)
+    # One memoizing route closure for the whole sweep — meeting legs and airport
+    # legs share it, so a repeated (origin, destination) pair costs one provider
+    # round trip, not one per leg. Bounded by the maps client's per-call timeout,
+    # not a routing deadline (#211).
+    route = make_route(maps)
 
     # --- flight sources: byAir records + TripIt segments (R2 union) ---
     records = [
@@ -610,31 +793,40 @@ def _run_sweep() -> dict:
             "user_profile current_home both empty) — see #162"
         ]
 
-    # Outcome-level budget gate (#172). Meeting routing above shares the
-    # budget-aware `route`; a single meeting leg whose provider-fallback chain
-    # began just under the deadline can return well past it. `make_route` stops
-    # STARTING new route calls past the plan deadline, but the current-block fetch
-    # and airport resolution below are non-route network work that would still run.
-    # Gate on the whole-sweep budget (not the tighter plan deadline, so cheap
-    # cache-served legs aren't needlessly abandoned): once even that is spent, skip
-    # cleanly here rather than push more work toward the host kill.
-    if time.monotonic() - sweep_start >= _SWEEP_WALL_CLOCK_BUDGET_SECONDS:
-        raise PlanBudgetExceeded("sweep budget spent after meeting routing")
-
     # --- airport facts ---
-    byair = ByAirClient.from_env()
-    airport_cache: dict[int, ResolvedAirport] = {}
+    # Static facts (IATA / flag / IANA tz) are immutable, so a warm sweep serves
+    # them from the persisted cross-sweep cache with no byAir call — this is what
+    # cut the ~7.6s ByAir cost that froze the calendar (#211). A byAir round trip
+    # happens only on a cache MISS (first-seen airport) or to refresh the live
+    # `delay.index` of a near-term DEPARTURE airport, where the nudge still moves
+    # the block. `delay.index` is never persisted (it is live).
+    byair = ByAirClient.from_env(timeout=_SWEEP_BYAIR_TIMEOUT_SECONDS)
+    static_facts = load_static_facts()
+    near_term_dep_ids = _near_term_departure_airport_ids(records, now)
 
-    def resolve_airport(airport_id: int) -> ResolvedAirport | None:
-        if airport_id not in airport_cache:
-            ctx = airport_context(byair.get_airport(airport_id))
-            airport_cache[airport_id] = ResolvedAirport(
-                iata=ctx.code,
-                flag=ctx.flag,
-                delay_index=ctx.delay_index,
-                timezone=ctx.timezone,
+    def fetch_ctx(airport_id: int) -> _AirportCtx | None:
+        # Network + exception handling lives here so the resolver policy stays
+        # pure and testable. A byAir failure (timeout / not_found) resolves to
+        # None → the policy degrades to cached static facts when it has them, or
+        # raises `AirportUnresolved` to fail the whole sweep closed (never a
+        # partial plan — a dropped flight's block would be orphan-deleted).
+        try:
+            return airport_context(byair.get_airport(airport_id))
+        except (ByAirError, urllib.error.URLError) as exc:
+            # Fail visibly: a one-line diagnostic so an operator can tell a
+            # transient byAir outage / timeout from a genuinely unknown airport
+            # id, without changing the degrade-or-fail-closed behaviour above.
+            print(
+                f"[drive-engine] byAir get_airport({airport_id}) failed ({exc})",
+                file=sys.stderr,
             )
-        return airport_cache[airport_id]
+            return None
+
+    resolve_airport, static_facts_dirty = _make_airport_resolver(
+        static_facts=static_facts,
+        near_term_dep_ids=near_term_dep_ids,
+        fetch_ctx=fetch_ctx,
+    )
 
     # --- current blocks ---
     raw = calendar.find_events(
@@ -664,11 +856,15 @@ def _run_sweep() -> dict:
 
     skipped = list(result.skipped) + list(meeting_skipped)
 
+    # Persist any newly-resolved static airport facts for the next warm sweep —
+    # best-effort, never a gate on applying a valid plan (see helper).
+    if static_facts_dirty():
+        _persist_static_facts_best_effort(static_facts)
+
     return finish_sweep(
         result.plan,
         skipped,
         calendar=calendar,
-        elapsed=time.monotonic() - sweep_start,
     )
 
 
@@ -687,14 +883,6 @@ def main() -> int:
     """
     try:
         payload = _run_sweep()
-    except PlanBudgetExceeded as exc:
-        # Routing (meeting side or airport side — both share the budget-aware
-        # `route`) ran past its budget. Skip this whole cycle cleanly rather than
-        # apply a partial plan (a partial `desired` set reads as orphaned blocks to
-        # delete). Next sweep resumes; the reconcile is idempotent (#172).
-        print(f"[drive-engine] {exc}; skipping cycle", file=sys.stderr)
-        print(json.dumps({"wake_agent": False, "data": {"reason": "plan_budget_exceeded"}}))
-        return 0
     # outer-boundary-process-contract:
     #   caller's silent-failure shape — the scheduler reads a non-zero exit OR
     #     malformed stdout as "don't wake this cycle";

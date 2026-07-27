@@ -2,18 +2,21 @@
 
 Documents the on-disk state files the drive-engine skill reads and writes. Per `coding-policy: stateful-artifacts`.
 
-## Owner Skill
+## Owner Skills
 
-`drive-engine`'s `skip_state.py` owns the schema: only it migrates `schema_version`. Writer and reader are both co-bundled and go through that owner API — the skip action (`skip_drive.py`) writes via `add_skip`, and the sweep (`reconcile_sweep.py`) reads via `load_active_skips`. No skill rewrites the file directly, so the owner's shape control is intact; no other skill reads or writes it.
+Each on-disk file has one owner module that owns its schema (only it migrates `schema_version`):
 
-The module came from the retired `drive-planner` (#156), whose bundle was folded into drive-engine once drive-engine was its only importer (#181).
+- `skip-state.json` — owned by `skip_state.py`. Writer and reader are co-bundled and go through the owner API: the skip action (`skip_drive.py`) writes via `add_skip`, the sweep (`reconcile_sweep.py`) reads via `load_active_skips`. No skill rewrites the file directly.
+- `airport-facts.json` — owned by `airport_facts_cache.py`. The sweep (`reconcile_sweep.py`) both reads (`load_static_facts`) and writes (`store_static_facts`) through the owner API (#211).
+
+`skip_state.py` came from the retired `drive-planner` (#156), whose bundle was folded into drive-engine once drive-engine was its only importer (#181).
 
 ## State Directory
 
 - Production: `/workspace/state/drive-planner/`
 - Tests override via the `DRIVE_PLANNER_STATE_DIR` environment variable
 
-The `drive-planner` name in both is deployed state, not a live reference — the store predates the #181 fold and renaming either would strand the skips already on disk. Rename only behind a migration.
+Both files share this directory (`airport_facts_cache.py` reuses `skip_state.state_dir` as the single source of truth). The `drive-planner` name is deployed state, not a live reference — the store predates the #181 fold and renaming it would strand the skips already on disk. Rename only behind a migration.
 
 ## Files
 
@@ -45,7 +48,7 @@ Tolerance:
 - A **missing** file is not an error — it is indistinguishable from "no skips yet" and reads as an empty map.
 - A **present but corrupt** file (unparseable JSON, non-object root, missing/invalid `schema_version`, or a `schema_version` below the current floor) raises `SkipStateError` rather than being silently treated as "no skips" — silently resetting would resurrect every skipped meeting as a nag.
 - A `schema_version` **newer** than this plugin is **refused** with `SkipStateError` on **both** paths — read (`load_active_skips`) and write (`add_skip` / `clear_skip` / `prune`). The fix is to upgrade the plugin to accept the new version.
-  - The **read** path fails closed (#184) rather than taking `stateful-artifacts`' no-prior-state branch. An empty skip map is not inert: it drops every active skip, so the sweep re-plans each meeting the operator declined and pings them about it — the "escalates work" a no-prior-state fallback is forbidden to become, and precisely the lombot #49 nag this file exists to prevent. Raising surfaces at `reconcile_sweep`'s fail-closed boundary as a clean no-wake skip: the same whole-cycle skip the engine already takes when it cannot build a trustworthy desired set (`PlanBudgetExceeded`). No partial plan, no nag. The cost is explicit — while the file is future-versioned, no drive blocks are planned at all.
+  - The **read** path fails closed (#184) rather than taking `stateful-artifacts`' no-prior-state branch. An empty skip map is not inert: it drops every active skip, so the sweep re-plans each meeting the operator declined and pings them about it — the "escalates work" a no-prior-state fallback is forbidden to become, and precisely the lombot #49 nag this file exists to prevent. Raising surfaces at `reconcile_sweep.main`'s fail-closed boundary as a clean no-wake skip: the same whole-cycle skip any sweep error takes. No partial plan, no nag. The cost is explicit — while the file is future-versioned, no drive blocks are planned at all.
   - The **write** path additionally must not proceed because it would rewrite the future-version file as v1 and clobber a newer writer's state.
   - Reachable only via a plugin **downgrade** after a future v2 ships, or a hand-edited file: writer and reader co-ship in one bundle in one plugin, published together, so there is no cross-pipeline skew window (`coding-policy: stateful-artifacts`, Cross-Pipeline Schema Bumps).
 - Malformed individual entries (non-string id or expiry, unparseable/naive expiry) are dropped, not fatal.
@@ -54,9 +57,39 @@ Migration:
 
 - `schema_version` `1` is the initial version; no migration exists yet. A future shape change bumps the version and adds the owner-side upgrade-on-read per `coding-policy: stateful-artifacts`. A version below the current floor has no migration path (v1 is first) and is refused; a version above is refused on both paths until the plugin is upgraded to accept it (see Tolerance — this artifact fails closed rather than reading a newer file as no-usable-prior-state, #184).
 
+### `airport-facts.json`
+
+The cross-sweep cache of **static** airport facts — IATA code, country flag, IANA timezone — keyed by byAir `airport_id`. Owned by `airport_facts_cache.py`. Introduced in #211 to stop the sweep re-fetching immutable facts from byAir every ~30-min cycle (~7.6s at 13 airports, the dominant plan-phase cost that froze the calendar).
+
+```json
+{
+  "schema_version": 1,
+  "airports": {
+    "3": {"iata": "JFK", "flag": "🇺🇸", "tz": "America/New_York"}
+  }
+}
+```
+
+Fields:
+
+- `schema_version` (int, required) — currently `1`
+- `airports` (object, required) — map of `airport_id` (string key) → `{iata, flag, tz}`. `iata` is always a non-empty string (a None-IATA resolution is a transient miss, never cached); `flag` / `tz` may be `null`.
+
+Writer / reader contract:
+
+- **Writer / Reader** — the sweep (`reconcile_sweep.py`) both reads (`load_static_facts`) and writes (`store_static_facts`) through the owner API. It writes only when a sweep learned a fresh fact (a first-seen airport, or a changed one). No other skill touches the file.
+- byAir's live `delay.index` congestion nudge is **not** cached here — it changes through the day, so the sweep fetches it live and only for near-term departures (`reconcile_sweep._near_term_departure_airport_ids`).
+
+Tolerance — **hint, not authority** (the deliberate opposite of `skip-state.json`):
+
+- A **missing**, **unreadable/corrupt**, **non-object**, or **future-versioned** file all resolve to an **empty map** — the sweep re-fetches from byAir this cycle, exactly the pre-cache behaviour. Nothing raises; a diagnostic goes to stderr for anything but a plain missing file. A stale-vs-fresh static fact costs only latency, never a wrong block, so failing closed (as the skip store does) would be the wrong trade.
+- Malformed individual entries (missing/empty `iata`, non-object value, non-integer key) are dropped; a well-formed remainder is still returned.
+
+Migration: `schema_version` `1` is the initial version. Because a future version reads as no-usable-prior-state (refetch, non-disruptive), a newer writer's file survives untouched until this reader is upgraded — no fail-closed refusal is needed (`coding-policy: stateful-artifacts`, Cross-Pipeline Schema Bumps). The refetch is non-disruptive even when byAir is also down: a cache-miss airport that byAir can't resolve makes `reconcile_sweep._resolve_one_airport` raise `AirportUnresolved`, failing the whole sweep closed rather than building a partial plan that would orphan-delete live blocks (#211). So the empty-map fallback never escalates work — it costs at most one slow (or skipped) sweep, never a wrong or deleted block.
+
 ## Calendar-as-State: Drive Blocks
 
-A drive block has no local record — the calendar event itself IS the state (Epic #59 §4). The sweep re-fetches the near-term window by a direct API call and reads each block back off the event. There is no `blocks.json`; the only local state file is `skip-state.json` above.
+A drive block has no local record — the calendar event itself IS the state (Epic #59 §4). The sweep re-fetches the near-term window by a direct API call and reads each block back off the event. There is no `blocks.json`; the local state files are `skip-state.json` and `airport-facts.json` above.
 
 Every block the engine writes is owned by `block_codec.py` — marker template, machine-state keys, the generations it recognizes, and its version/tolerance rules all live there as named constants and its module docstring. Per `coding-policy: script-as-black-box`, this file does not restate them.
 
