@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.72 — 2026-07-27
+
 ### Fixed — drive-engine: drop the plan-phase time budget that froze the calendar (#211)
 
 The sweep's 15s plan-phase budget (`_PLAN_PHASE_BUDGET_SECONDS`, from #172) was conceived to stop an LLM from wandering into deep reasoning and burning tokens. But `reconcile_sweep.py` is a deterministic script — there is no LLM in the plan / route / apply path, so there is nothing to bound. Once the tracked itinerary grew to ~13 unique airports, byAir's `get_airport` (~0.6s each, ~7.6s total) pushed elapsed past the deadline while `build_plan` was still resolving airports; `make_route` then refused the next cache-miss route and raised `PlanBudgetExceeded`, abandoning a perfectly valid, fully-computed plan. Every ~30-min cycle skipped with `plan_budget_exceeded` and applied nothing — the drive blocks froze for ~4.5 days.
