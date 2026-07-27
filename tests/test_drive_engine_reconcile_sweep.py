@@ -389,14 +389,23 @@ def test_resolve_miss_with_byair_failure_raises_fail_closed():
         _resolve_one_airport(static=None, want_delay=False, fetch=lambda: None)
 
 
-def test_resolve_none_iata_context_not_persisted():
-    """A None-IATA context is a transient miss — resolved but never cached, or it
-    would pin the flight unresolvable forever."""
+def test_resolve_none_iata_context_with_static_degrades_to_cache():
+    """A code-less live context (byAir responded but carried no IATA) with cached
+    static facts degrades to those facts — never a code-less ResolvedAirport that
+    would drop the flight and orphan-delete its block (#213 review round 3)."""
+    static = StaticAirport(iata="LHR", flag="🇬🇧", timezone="Europe/London")
     resolved, new_static = _resolve_one_airport(
-        static=None, want_delay=False, fetch=lambda: _FakeCtx(None, flag="🇺🇸")
+        static=static, want_delay=True, fetch=lambda: _FakeCtx(None, flag="🇬🇧")
     )
-    assert resolved is not None and resolved.iata is None
-    assert new_static is None  # not persisted
+    assert resolved == ResolvedAirport(iata="LHR", flag="🇬🇧", timezone="Europe/London")
+    assert new_static is None  # nothing fresh to persist
+
+
+def test_resolve_none_iata_context_no_static_raises():
+    """A code-less live context with NO cached fallback fails the sweep closed,
+    never a code-less resolution that would drop the flight into a partial plan."""
+    with pytest.raises(AirportUnresolved):
+        _resolve_one_airport(static=None, want_delay=False, fetch=lambda: _FakeCtx(None, flag="🇺🇸"))
 
 
 def _counting_fetch(ctx_by_id):

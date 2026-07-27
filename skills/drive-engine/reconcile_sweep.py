@@ -508,18 +508,27 @@ class _AirportCtx(Protocol):
 
 
 class AirportUnresolved(Exception):
-    """A first-seen (uncached) airport could not be resolved because byAir was
-    unavailable.
+    """A first-seen (uncached) airport could not be resolved to a usable IATA.
 
-    Propagates to `main`'s fail-closed boundary so the WHOLE sweep skips cleanly
-    rather than building a PARTIAL plan (#211 review). A dropped flight's airport
-    leg would be absent from `desired`, and `reconcile.plan_reconcile` deletes any
-    unified block with no matching desired leg as an orphan — so a byAir outage
-    during a cache miss would delete live drive blocks. This is the "no partial
-    plan" invariant #172 guarded with the old plan budget; failing closed on an
-    unresolvable airport preserves it without a wall-clock deadline. A byAir
-    failure where the static facts ARE cached does not raise — it degrades to the
-    cached facts (no live delay), which is strictly safe."""
+    Raised when byAir was unavailable OR returned a context with no IATA code, and
+    no cached static facts exist to fall back on. Propagates to `main`'s
+    fail-closed boundary so the WHOLE sweep skips cleanly rather than building a
+    PARTIAL plan (#211 review). A dropped flight's airport leg would be absent from
+    `desired`, and `reconcile.plan_reconcile` deletes any unified block with no
+    matching desired leg as an orphan — so an unresolvable airport during a cache
+    miss would delete live drive blocks. This is the "no partial plan" invariant
+    #172 guarded with the old plan budget; failing closed preserves it without a
+    wall-clock deadline. When static facts ARE cached, no failure raises — it
+    degrades to the cached facts (no live delay), which is strictly safe."""
+
+
+def _resolved_from_static(static: StaticAirport) -> ResolvedAirport:
+    """A `ResolvedAirport` carrying only the cached immutable facts — no live
+    `delay.index`. The safe fallback whenever a live byAir fetch can't improve on
+    what the cross-sweep cache already holds."""
+    return ResolvedAirport(
+        iata=static.iata, flag=static.flag, delay_index=None, timezone=static.timezone
+    )
 
 
 def _resolve_one_airport(
@@ -527,52 +536,41 @@ def _resolve_one_airport(
     static: StaticAirport | None,
     want_delay: bool,
     fetch: Callable[[], _AirportCtx | None],
-) -> tuple[ResolvedAirport | None, StaticAirport | None]:
+) -> tuple[ResolvedAirport, StaticAirport | None]:
     """Pure resolution policy for one airport (#211). Returns
     `(resolved, new_static)`:
 
-    - `resolved` is the `ResolvedAirport`. It is None only for a resolved-but-
-      IATA-less context (a successful byAir response carrying no IATA code) — the
-      caller skips just that flight. A cache miss whose byAir fetch FAILS instead
-      raises `AirportUnresolved` (fail closed — never a partial plan).
+    - `resolved` is always a valid-IATA `ResolvedAirport` — the policy never
+      returns a code-less one. When no usable live IATA is available (byAir failed
+      OR returned a context with `code is None`), it degrades to cached static
+      facts if present, else raises `AirportUnresolved` (fail closed — never a
+      partial plan that would orphan-delete a block).
     - `new_static` is a `StaticAirport` the caller should persist when this call
       learned a fresh real IATA (differing from `static`), else None.
 
     A warm static hit that needs no delay is served with ZERO fetches. Otherwise
     `fetch()` performs the byAir round trip (returning None on failure); the live
     `delay.index` is carried only when `want_delay`, and never persisted (it is
-    not static). A byAir failure degrades to the cached static facts when we have
-    them (safe — airport still resolved, only the live nudge lost); with no cache
-    it raises `AirportUnresolved`. A None-IATA context is a transient miss — never
-    cached, or it would pin the flight unresolvable forever."""
+    not static)."""
     if static is not None and not want_delay:
-        return (
-            ResolvedAirport(
-                iata=static.iata, flag=static.flag, delay_index=None, timezone=static.timezone
-            ),
-            None,
-        )
+        return _resolved_from_static(static), None
     ctx = fetch()
-    if ctx is None:
+    if ctx is None or ctx.code is None:
+        # No usable live IATA — byAir failed, OR returned a code-less context.
+        # Degrade to cached static facts if we have them (safe: airport still
+        # fully resolved from cache, only the live delay nudge lost); with no
+        # cache, fail the whole sweep closed rather than drop the flight.
         if static is not None:
-            return (
-                ResolvedAirport(
-                    iata=static.iata, flag=static.flag, delay_index=None, timezone=static.timezone
-                ),
-                None,
-            )
-        raise AirportUnresolved("byAir unavailable resolving a first-seen airport")
+            return _resolved_from_static(static), None
+        raise AirportUnresolved("no usable IATA resolving a first-seen airport")
     resolved = ResolvedAirport(
         iata=ctx.code,
         flag=ctx.flag,
         delay_index=ctx.delay_index if want_delay else None,
         timezone=ctx.timezone,
     )
-    new_static: StaticAirport | None = None
-    if ctx.code is not None:
-        fresh = StaticAirport(iata=ctx.code, flag=ctx.flag, timezone=ctx.timezone)
-        if static != fresh:
-            new_static = fresh
+    fresh = StaticAirport(iata=ctx.code, flag=ctx.flag, timezone=ctx.timezone)
+    new_static = fresh if static != fresh else None
     return resolved, new_static
 
 
@@ -581,13 +579,13 @@ def _make_airport_resolver(
     static_facts: dict[int, StaticAirport],
     near_term_dep_ids: set[int],
     fetch_ctx: Callable[[int], _AirportCtx | None],
-) -> tuple[Callable[[int], ResolvedAirport | None], Callable[[], bool]]:
+) -> tuple[Callable[[int], ResolvedAirport], Callable[[], bool]]:
     """Build the sweep's memoizing airport resolver + a dirty-flag reader (#211).
 
-    Returns `(resolve, dirty)`: `resolve(airport_id)` yields the `ResolvedAirport`
-    (None only for a resolved-but-IATA-less context; a cache-miss byAir failure
-    raises `AirportUnresolved` to fail the sweep closed), and `dirty()` reports
-    whether any call learned a fresh static fact worth persisting.
+    Returns `(resolve, dirty)`: `resolve(airport_id)` yields a valid-IATA
+    `ResolvedAirport`, or raises `AirportUnresolved` to fail the sweep closed when
+    a cache-miss airport has no usable live IATA and no cached fallback; `dirty()`
+    reports whether any call learned a fresh static fact worth persisting.
 
     The per-sweep memo is keyed by `airport_id` ALONE, which is sufficient:
     `want_delay` is a pure function of the key (`airport_id in near_term_dep_ids`,
@@ -598,10 +596,10 @@ def _make_airport_resolver(
     saw the same `want_delay`. `fetch_ctx` owns the network + exception handling
     so the policy (`_resolve_one_airport`) stays pure; a repeated (origin) airport
     costs one byAir round trip, not one per leg."""
-    memo: dict[int, ResolvedAirport | None] = {}
+    memo: dict[int, ResolvedAirport] = {}
     dirty = False
 
-    def resolve(airport_id: int) -> ResolvedAirport | None:
+    def resolve(airport_id: int) -> ResolvedAirport:
         nonlocal dirty
         if airport_id in memo:
             return memo[airport_id]
