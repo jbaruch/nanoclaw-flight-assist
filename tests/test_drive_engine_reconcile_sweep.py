@@ -31,6 +31,7 @@ from maps_client import MapsError, TravelTime  # noqa: E402
 from reconcile import Create, Delete, DesiredBlock, ReconcilePlan  # noqa: E402
 from reconcile_sweep import (  # noqa: E402
     ResolvedAirport,
+    _make_airport_resolver,
     _near_term_departure_airport_ids,
     _resolve_one_airport,
     build_plan,
@@ -395,6 +396,77 @@ def test_resolve_none_iata_context_not_persisted():
     )
     assert resolved is not None and resolved.iata is None
     assert new_static is None  # not persisted
+
+
+def _counting_fetch(ctx_by_id):
+    """A `fetch_ctx(airport_id)` that records calls and serves from `ctx_by_id`."""
+    calls = []
+
+    def fetch(airport_id):
+        calls.append(airport_id)
+        return ctx_by_id.get(airport_id)
+
+    return fetch, calls
+
+
+def test_resolver_memoizes_repeated_airport():
+    """A repeated airport (both a departure origin and a transfer endpoint)
+    resolves ONCE — one byAir round trip, not one per leg (#211)."""
+    fetch, calls = _counting_fetch({5: _FakeCtx("SFO", timezone="America/Los_Angeles")})
+    resolve, dirty = _make_airport_resolver(
+        static_facts={}, near_term_dep_ids=set(), fetch_ctx=fetch
+    )
+    first = resolve(5)
+    second = resolve(5)
+    assert first == second == ResolvedAirport(iata="SFO", timezone="America/Los_Angeles")
+    assert calls == [5]  # memoized — one fetch
+    assert dirty() is True  # a fresh fact was learned
+
+
+def test_resolver_cache_hit_never_skips_near_term_delay_refresh():
+    """The order-independence invariant (the #211 review concern): `want_delay` is
+    a pure function of airport_id, so a near-term departure's live delay is carried
+    on the FIRST resolution regardless of which leg triggered it — a later cache
+    hit can never serve a stale no-delay result. Resolving airport 5 (a near-term
+    departure) twice yields the delay both times from a single fetch."""
+    fetch, calls = _counting_fetch({5: _FakeCtx("SFO", delay_index="high")})
+    resolve, _dirty = _make_airport_resolver(
+        static_facts={5: StaticAirport(iata="SFO")},  # already statically cached
+        near_term_dep_ids={5},  # ...but near-term, so delay must refresh
+        fetch_ctx=fetch,
+    )
+    first = resolve(5)  # e.g. reached first as another flight's arrival endpoint
+    second = resolve(5)  # then as its own near-term departure
+    assert first is not None and first.delay_index == "high"
+    assert second == first  # cache hit carries the same fresh delay
+    assert calls == [5]  # exactly one byAir refresh, not zero and not two
+
+
+def test_resolver_warm_hit_makes_no_fetch_and_stays_clean():
+    """A statically-cached airport with no near-term departure resolves with zero
+    fetches and leaves the dirty flag unset (nothing new to persist)."""
+    fetch, calls = _counting_fetch({})
+    resolve, dirty = _make_airport_resolver(
+        static_facts={7: StaticAirport(iata="BNA", flag="🇺🇸", timezone="America/Chicago")},
+        near_term_dep_ids=set(),
+        fetch_ctx=fetch,
+    )
+    assert resolve(7) == ResolvedAirport(iata="BNA", flag="🇺🇸", timezone="America/Chicago")
+    assert calls == []
+    assert dirty() is False
+
+
+def test_resolver_byair_miss_returns_none_and_stays_clean():
+    """A first-seen airport whose fetch fails resolves to None, memoizes the miss,
+    and never marks the cache dirty (no bogus fact persisted)."""
+    fetch, calls = _counting_fetch({})  # id 9 absent → fetch returns None
+    resolve, dirty = _make_airport_resolver(
+        static_facts={}, near_term_dep_ids=set(), fetch_ctx=fetch
+    )
+    assert resolve(9) is None
+    assert resolve(9) is None
+    assert calls == [9]  # the miss is memoized, not re-attempted this sweep
+    assert dirty() is False
 
 
 def test_near_term_departure_ids_selects_within_window_only():

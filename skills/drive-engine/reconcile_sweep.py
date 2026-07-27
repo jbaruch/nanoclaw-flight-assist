@@ -554,6 +554,48 @@ def _resolve_one_airport(
     return resolved, new_static
 
 
+def _make_airport_resolver(
+    *,
+    static_facts: dict[int, StaticAirport],
+    near_term_dep_ids: set[int],
+    fetch_ctx: Callable[[int], _AirportCtx | None],
+) -> tuple[Callable[[int], ResolvedAirport | None], Callable[[], bool]]:
+    """Build the sweep's memoizing airport resolver + a dirty-flag reader (#211).
+
+    Returns `(resolve, dirty)`: `resolve(airport_id)` yields the `ResolvedAirport`
+    (or None when unresolvable this sweep), and `dirty()` reports whether any call
+    learned a fresh static fact worth persisting.
+
+    The per-sweep memo is keyed by `airport_id` ALONE, which is sufficient:
+    `want_delay` is a pure function of the key (`airport_id in near_term_dep_ids`,
+    a set fixed for the whole sweep), so it is identical on every call for a given
+    airport. A cache hit therefore always carries the correct delay treatment — a
+    near-term departure's live nudge can never be skipped by a hit seeded from an
+    earlier arrival-side resolution of the same airport, since that earlier call
+    saw the same `want_delay`. `fetch_ctx` owns the network + exception handling
+    so the policy (`_resolve_one_airport`) stays pure; a repeated (origin) airport
+    costs one byAir round trip, not one per leg."""
+    memo: dict[int, ResolvedAirport | None] = {}
+    dirty = False
+
+    def resolve(airport_id: int) -> ResolvedAirport | None:
+        nonlocal dirty
+        if airport_id in memo:
+            return memo[airport_id]
+        resolved, new_static = _resolve_one_airport(
+            static=static_facts.get(airport_id),
+            want_delay=airport_id in near_term_dep_ids,
+            fetch=lambda: fetch_ctx(airport_id),
+        )
+        if new_static is not None:
+            static_facts[airport_id] = new_static
+            dirty = True
+        memo[airport_id] = resolved
+        return resolved
+
+    return resolve, lambda: dirty
+
+
 def _near_term_departure_airport_ids(records: list[dict], now: datetime) -> set[int]:
     """Departure airport ids of byAir flights leaving within
     `_DELAY_FRESHNESS_WINDOW` of `now`.
@@ -718,36 +760,23 @@ def _run_sweep() -> dict:
     # the block. `delay.index` is never persisted (it is live).
     byair = ByAirClient.from_env(timeout=_SWEEP_BYAIR_TIMEOUT_SECONDS)
     static_facts = load_static_facts()
-    facts_dirty = False
     near_term_dep_ids = _near_term_departure_airport_ids(records, now)
-    airport_cache: dict[int, ResolvedAirport | None] = {}
 
-    def resolve_airport(airport_id: int) -> ResolvedAirport | None:
-        nonlocal facts_dirty
-        if airport_id in airport_cache:
-            return airport_cache[airport_id]
+    def fetch_ctx(airport_id: int) -> _AirportCtx | None:
+        # Network + exception handling lives here so the resolver policy stays
+        # pure and testable. A byAir failure (timeout / not_found) resolves to
+        # None → the policy falls back to cached static facts, or skips the
+        # flight this sweep (retried next; the reconcile is idempotent).
+        try:
+            return airport_context(byair.get_airport(airport_id))
+        except (ByAirError, urllib.error.URLError):
+            return None
 
-        def fetch() -> _AirportCtx | None:
-            # Network + exception handling lives here so the resolution POLICY
-            # (`_resolve_one_airport`) stays pure and testable. A byAir failure
-            # (timeout / not_found) resolves to None → the policy falls back to
-            # cached static facts, or skips the flight this sweep (retried next;
-            # the reconcile is idempotent).
-            try:
-                return airport_context(byair.get_airport(airport_id))
-            except (ByAirError, urllib.error.URLError):
-                return None
-
-        resolved, new_static = _resolve_one_airport(
-            static=static_facts.get(airport_id),
-            want_delay=airport_id in near_term_dep_ids,
-            fetch=fetch,
-        )
-        if new_static is not None:
-            static_facts[airport_id] = new_static
-            facts_dirty = True
-        airport_cache[airport_id] = resolved
-        return resolved
+    resolve_airport, static_facts_dirty = _make_airport_resolver(
+        static_facts=static_facts,
+        near_term_dep_ids=near_term_dep_ids,
+        fetch_ctx=fetch_ctx,
+    )
 
     # --- current blocks ---
     raw = calendar.find_events(
@@ -778,7 +807,7 @@ def _run_sweep() -> dict:
     skipped = list(result.skipped) + list(meeting_skipped)
 
     # Persist any newly-resolved static airport facts for the next warm sweep.
-    if facts_dirty:
+    if static_facts_dirty():
         store_static_facts(static_facts)
 
     return finish_sweep(
