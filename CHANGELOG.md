@@ -1,5 +1,17 @@
 # Changelog
 
+### Fixed — drive-engine: drop the plan-phase time budget that froze the calendar (#211)
+
+The sweep's 15s plan-phase budget (`_PLAN_PHASE_BUDGET_SECONDS`, from #172) was conceived to stop an LLM from wandering into deep reasoning and burning tokens. But `reconcile_sweep.py` is a deterministic script — there is no LLM in the plan / route / apply path, so there is nothing to bound. Once the tracked itinerary grew to ~13 unique airports, byAir's `get_airport` (~0.6s each, ~7.6s total) pushed elapsed past the deadline while `build_plan` was still resolving airports; `make_route` then refused the next cache-miss route and raised `PlanBudgetExceeded`, abandoning a perfectly valid, fully-computed plan. Every ~30-min cycle skipped with `plan_budget_exceeded` and applied nothing — the drive blocks froze for ~4.5 days.
+
+The plan phase now runs to completion. The only bound on it is per-call network timeouts (`_SWEEP_MAPS_TIMEOUT_SECONDS`, and a new `_SWEEP_BYAIR_TIMEOUT_SECONDS`) — the real watchdog against a genuinely hung provider, where a failed call skips one leg and retries next sweep rather than stalling. `PlanBudgetExceeded` and both plan-budget gates are removed.
+
+The write phase keeps its bound but no longer starves: `finish_sweep` gives `apply_plan` a **fixed** `_APPLY_PHASE_BUDGET_SECONDS`, decoupled from plan elapsed. The old `budget - elapsed` formula dropped the apply budget to 0 whenever planning ran long, so a slow-but-valid plan also wrote nothing. The write phase still stops with margin before the host precheck kill and defers the rest to the next idempotent sweep.
+
+**Cross-sweep static airport-facts cache** (`airport_facts_cache.py`): IATA / country flag / IANA timezone are immutable, so they now persist to `airport-facts.json` and a warm sweep resolves known airports with zero byAir calls — cutting the dominant plan-phase cost to ~0. byAir's live `delay.index` congestion nudge is not cached; the sweep refreshes it only for departures within 24h, where it still moves the block. The cache is a hint, not authority: a missing, corrupt, or future-versioned file degrades to a refetch, never a raise (the deliberate opposite of the skip store's fail-closed read).
+
+The host-side precheck kill (`SCRIPT_TIMEOUT_MS`, 30s, in the `jbaruch/nanoclaw` agent-runner) is a separate layer — a cold sweep can still exceed it, though the mid-apply kill is idempotent-safe. A per-skill precheck-timeout override for real headroom is tracked in `jbaruch/nanoclaw`.
+
 ## 0.2.66 — 2026-07-21
 
 ### Added — `nightly-travel-sync` logs newly-appeared trips to daily memory (#204)

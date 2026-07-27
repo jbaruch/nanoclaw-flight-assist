@@ -123,12 +123,11 @@ def _read_skips() -> dict[str, str]:
         each skipped meeting and pings the operator about drives they
         declined — the nag `stateful-artifacts` forbids a fallback from
         escalating into, and the exact lombot #49 scar this module exists
-        to prevent. Raising instead surfaces at `reconcile_sweep`'s
-        fail-closed boundary as a clean no-wake skip, the same whole-cycle
-        skip the engine already takes when it cannot build a trustworthy
-        desired set (`PlanBudgetExceeded`) — no partial plan, no nag. The
-        fix is to upgrade the plugin. A write additionally must not proceed
-        because it would rewrite the file as v1 and clobber a newer writer.
+        to prevent. Raising instead surfaces at `reconcile_sweep.main`'s
+        fail-closed boundary as a clean no-wake skip — the same whole-cycle
+        skip any sweep error takes: no partial plan, no nag. The fix is to
+        upgrade the plugin. A write additionally must not proceed because it
+        would rewrite the file as v1 and clobber a newer writer.
       - below the current floor → owner-side migration point. v1 is the
         first and only version, so any lower value is corrupt, not an older
         record to migrate — refuse explicitly. A future bump adds the

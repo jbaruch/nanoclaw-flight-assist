@@ -5,8 +5,9 @@ a fake airport resolver and router, fixed `now`. These pin: airport + meeting
 blocks are combined into ONE plan; legacy drive-planner (dp) blocks on the calendar
 are LEFT UNTOUCHED (managed_legacy empty — the operator cleans them up); an
 unresolvable airport is skipped, not guessed. main()'s live I/O work (`_run_sweep`)
-is not unit-tested, but main()'s outer-boundary contract — clean budget skip vs.
-generic error payload vs. work payload — is, via a monkeypatched `_run_sweep`.
+is not unit-tested, but main()'s outer-boundary contract — generic error payload vs.
+work payload — is, via a monkeypatched `_run_sweep`. The airport-resolution policy
+(`_resolve_one_airport`) and near-term delay selection are unit-tested directly (#211).
 """
 
 from __future__ import annotations
@@ -23,12 +24,18 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
 import pytest  # noqa: E402
 import reconcile_sweep  # noqa: E402
+from airport_facts_cache import StaticAirport  # noqa: E402
 from block_codec import GEN_LEGACY_DP, ParsedBlock  # noqa: E402
-from engine import PlanBudgetExceeded  # noqa: E402
 from flight_identity import TRIPIT, Flight  # noqa: E402
 from maps_client import MapsError, TravelTime  # noqa: E402
 from reconcile import Create, Delete, DesiredBlock, ReconcilePlan  # noqa: E402
-from reconcile_sweep import ResolvedAirport, build_plan, make_route  # noqa: E402
+from reconcile_sweep import (  # noqa: E402
+    ResolvedAirport,
+    _near_term_departure_airport_ids,
+    _resolve_one_airport,
+    build_plan,
+    make_route,
+)
 
 UTC = timezone.utc
 HOME = "12 Example St, TN"
@@ -311,65 +318,108 @@ def test_make_route_caches_failure_as_none():
     assert maps.calls == [("home", "STN airport")]  # failure not re-attempted
 
 
-def test_make_route_raises_past_deadline_before_network_call():
-    """#172: past the budget deadline a cache MISS raises rather than entering the
-    provider-fallback chain — so a slow leg can't push the sweep past its budget
-    after the per-leg poll already passed. No network call is made."""
-    maps = _FakeMaps()
-    route = make_route(maps, deadline=100.0, clock=lambda: 100.0)
-    with pytest.raises(PlanBudgetExceeded):
-        route("home", "STN airport")
-    assert maps.calls == []  # aborted before the travel_time call
+# --- airport resolution: static cache + near-term delay refresh (#211) -------
 
 
-def test_make_route_serves_cache_hit_even_past_deadline():
-    """A cached pair is free, so it's served even past the deadline — only a MISS
-    (a new network call) is gated (#172)."""
-    cache: dict[tuple[str, str], timedelta | None] = {}
-    now = {"t": 0.0}
-    route = make_route(maps=_FakeMaps(), cache=cache, deadline=100.0, clock=lambda: now["t"])
-    before = route("home", "STN airport")  # populates the cache before the deadline
-    now["t"] = 200.0  # now well past the deadline
-    after = route("home", "STN airport")  # cache hit — must not raise
-    assert before == after == timedelta(seconds=1800)
+class _FakeCtx:
+    """Stand-in for `airport_context`'s AirportContext (the `_AirportCtx`
+    Protocol shape)."""
+
+    def __init__(self, code, flag=None, delay_index=None, timezone=None):
+        self.code = code
+        self.flag = flag
+        self.delay_index = delay_index
+        self.timezone = timezone
 
 
-def test_make_route_next_miss_raises_after_a_slow_call_crosses_deadline():
-    """#172: the 'last route succeeds after the deadline' case. A miss that starts
-    under the deadline is allowed to finish (even though the clock then crosses the
-    deadline), but the NEXT miss raises — no further provider-fallback chain is
-    entered, so the sweep reaches its clean no-wake path deterministically."""
-    maps = _FakeMaps()
-    now = {"t": 14.0}  # under the 15.0 deadline
+def test_resolve_warm_static_hit_no_delay_never_fetches():
+    """A cached airport with no near-term departure resolves with ZERO byAir
+    calls — the warm-sweep saving that unfroze the calendar (#211)."""
+    static = StaticAirport(iata="JFK", flag="🇺🇸", timezone="America/New_York")
+    calls = []
 
-    def clock() -> float:
-        return now["t"]
+    def fetch():
+        calls.append(1)
+        return _FakeCtx("JFK")
 
-    route = make_route(maps, deadline=15.0, clock=clock)
-    first = route("home", "STN airport")  # begins under budget, completes
-    assert first == timedelta(seconds=1800)
-    now["t"] = 31.0  # that call returned well past the deadline
-    with pytest.raises(PlanBudgetExceeded):
-        route("STN airport", "CPH airport")  # a new miss — refused
-    assert maps.calls == [("home", "STN airport")]  # the second never hit the network
+    resolved, new_static = _resolve_one_airport(static=static, want_delay=False, fetch=fetch)
+    assert calls == []  # never fetched
+    assert resolved == ResolvedAirport(iata="JFK", flag="🇺🇸", timezone="America/New_York")
+    assert new_static is None  # nothing new to persist
 
 
-# --- main() outer-boundary contract (#172) ----------------------------------
-
-
-def test_main_emits_clean_skip_on_plan_budget_exceeded(monkeypatch, capsys):
-    """The production contract: when routing raises PlanBudgetExceeded, main()
-    emits the clean no-wake skip payload (NOT the generic error payload) and
-    exits 0, so the scheduler skips the cycle instead of treating it as failure."""
-    monkeypatch.setattr(
-        reconcile_sweep,
-        "_run_sweep",
-        lambda: (_ for _ in ()).throw(PlanBudgetExceeded("budget spent")),
+def test_resolve_miss_fetches_and_returns_static_to_persist():
+    """A first-seen airport fetches, resolves, and hands back the static trio to
+    persist (never the live delay index)."""
+    resolved, new_static = _resolve_one_airport(
+        static=None,
+        want_delay=False,
+        fetch=lambda: _FakeCtx("BNA", flag="🇺🇸", delay_index="high", timezone="America/Chicago"),
     )
-    rc = reconcile_sweep.main()
-    assert rc == 0
-    out = json.loads(capsys.readouterr().out)
-    assert out == {"wake_agent": False, "data": {"reason": "plan_budget_exceeded"}}
+    assert resolved == ResolvedAirport(iata="BNA", flag="🇺🇸", timezone="America/Chicago")
+    assert new_static == StaticAirport(iata="BNA", flag="🇺🇸", timezone="America/Chicago")
+
+
+def test_resolve_near_term_refreshes_delay_but_persists_only_static():
+    """A near-term departure (want_delay) fetches to carry the fresh delay index
+    on the resolved airport, yet the persisted static trio still omits it."""
+    static = StaticAirport(iata="SFO", flag="🇺🇸", timezone="America/Los_Angeles")
+    ctx = _FakeCtx("SFO", flag="🇺🇸", delay_index="high", timezone="America/Los_Angeles")
+    resolved, new_static = _resolve_one_airport(static=static, want_delay=True, fetch=lambda: ctx)
+    assert resolved is not None and resolved.delay_index == "high"  # live nudge on the block
+    assert new_static is None  # static unchanged → nothing re-persisted
+
+
+def test_resolve_byair_failure_falls_back_to_cached_static():
+    """A byAir failure on a near-term refresh degrades to the cached static facts
+    (delay dropped) rather than skipping the flight."""
+    static = StaticAirport(iata="LHR", flag="🇬🇧", timezone="Europe/London")
+    resolved, new_static = _resolve_one_airport(static=static, want_delay=True, fetch=lambda: None)
+    assert resolved == ResolvedAirport(iata="LHR", flag="🇬🇧", timezone="Europe/London")
+    assert new_static is None
+
+
+def test_resolve_miss_with_byair_failure_skips_flight():
+    """A first-seen airport whose byAir fetch fails resolves to None — the flight
+    is skipped this sweep and retried next (idempotent)."""
+    resolved, new_static = _resolve_one_airport(static=None, want_delay=False, fetch=lambda: None)
+    assert resolved is None
+    assert new_static is None
+
+
+def test_resolve_none_iata_context_not_persisted():
+    """A None-IATA context is a transient miss — resolved but never cached, or it
+    would pin the flight unresolvable forever."""
+    resolved, new_static = _resolve_one_airport(
+        static=None, want_delay=False, fetch=lambda: _FakeCtx(None, flag="🇺🇸")
+    )
+    assert resolved is not None and resolved.iata is None
+    assert new_static is None  # not persisted
+
+
+def test_near_term_departure_ids_selects_within_window_only():
+    """Only byAir departures within `_DELAY_FRESHNESS_WINDOW` of now get a delay
+    refresh; past, far-future, and unparseable ones are excluded (#211)."""
+    now = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+    records = [
+        {"dep_airport_id": 1, "scheduled_dep_time": "2026-07-27T18:00:00+00:00"},  # in 6h → in
+        {"dep_airport_id": 2, "scheduled_dep_time": "2026-07-30T12:00:00+00:00"},  # 3d → out
+        {"dep_airport_id": 3, "scheduled_dep_time": "2026-07-27T06:00:00+00:00"},  # past → out
+        {"dep_airport_id": 4, "scheduled_dep_time": "not-a-date"},  # unparseable → out
+        {"scheduled_dep_time": "2026-07-27T13:00:00+00:00"},  # no dep id → out
+    ]
+    assert _near_term_departure_airport_ids(records, now) == {1}
+
+
+def test_near_term_departure_ids_excludes_naive_timestamps():
+    """A tz-naive `scheduled_dep_time` can't be safely compared to the aware now,
+    so it is excluded rather than guessed."""
+    now = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+    records = [{"dep_airport_id": 9, "scheduled_dep_time": "2026-07-27T13:00:00"}]
+    assert _near_term_departure_airport_ids(records, now) == set()
+
+
+# --- main() outer-boundary contract ------------------------------------------
 
 
 def test_main_emits_error_payload_on_unexpected_exception(monkeypatch, capsys):
@@ -491,16 +541,14 @@ def test_shadow_branch_never_calls_apply(monkeypatch, capsys):
     """The safety contract: a shadow run must not touch the calendar."""
     monkeypatch.setenv("DRIVE_ENGINE_SHADOW", "1")
     spy = _ApplySpy()
-    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), elapsed=0.0, apply=spy)
+    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), apply=spy)
     assert spy.calls == []
 
 
 def test_shadow_branch_renders_to_stderr_not_stdout(monkeypatch, capsys):
     """stdout carries the scheduler's JSON payload — the diff must not land there."""
     monkeypatch.setenv("DRIVE_ENGINE_SHADOW", "1")
-    reconcile_sweep.finish_sweep(
-        _shadow_plan(), [], calendar=object(), elapsed=0.0, apply=_ApplySpy()
-    )
+    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), apply=_ApplySpy())
     out, err = capsys.readouterr()
     assert "[shadow] reconcile plan" in err
     assert "+ CREATE airport_departure" in err
@@ -510,7 +558,7 @@ def test_shadow_branch_renders_to_stderr_not_stdout(monkeypatch, capsys):
 def test_shadow_branch_returns_the_shadow_payload(monkeypatch):
     monkeypatch.setenv("DRIVE_ENGINE_SHADOW", "1")
     payload = reconcile_sweep.finish_sweep(
-        _shadow_plan(), ["a skip"], calendar=object(), elapsed=0.0, apply=_ApplySpy()
+        _shadow_plan(), ["a skip"], calendar=object(), apply=_ApplySpy()
     )
     assert payload["wake_agent"] is False
     assert payload["data"]["shadow"] is True
@@ -522,22 +570,17 @@ def test_live_branch_applies_when_shadow_is_off(monkeypatch):
     monkeypatch.delenv("DRIVE_ENGINE_SHADOW", raising=False)
     spy = _ApplySpy()
     cal = object()
-    payload = reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=cal, elapsed=0.0, apply=spy)
+    payload = reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=cal, apply=spy)
     assert len(spy.calls) == 1
     plan, kwargs = spy.calls[0]
     assert kwargs["calendar"] is cal and kwargs["calendar_id"] == "primary"
     assert "shadow" not in payload["data"]
 
 
-def test_live_branch_passes_remaining_budget_to_apply(monkeypatch):
-    """#164: apply gets what the fetch/plan phase left, never a negative budget."""
+def test_live_branch_passes_fixed_apply_budget(monkeypatch):
+    """#211: apply gets a FIXED write-phase budget, decoupled from how long the
+    plan phase took — never the old `budget - elapsed` that starved it to 0."""
     monkeypatch.delenv("DRIVE_ENGINE_SHADOW", raising=False)
     spy = _ApplySpy()
-    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), elapsed=5.0, apply=spy)
-    assert spy.calls[0][1]["budget_seconds"] == pytest.approx(
-        reconcile_sweep._SWEEP_WALL_CLOCK_BUDGET_SECONDS - 5.0
-    )
-
-    spy2 = _ApplySpy()
-    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), elapsed=9_999.0, apply=spy2)
-    assert spy2.calls[0][1]["budget_seconds"] == 0.0  # clamped, never negative
+    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), apply=spy)
+    assert spy.calls[0][1]["budget_seconds"] == reconcile_sweep._APPLY_PHASE_BUDGET_SECONDS
