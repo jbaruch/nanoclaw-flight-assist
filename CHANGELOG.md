@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.73 — 2026-07-28
+
 ### Changed — flight-assist: declare its own precheck budget (jbaruch/nanoclaw#890)
 
 `jbaruch/nanoclaw#890` removed the flat 30s precheck kill the agent-runner applied to every skill. Two timeouts bound a precheck now: what the skill declares via `precheck_timeout_ms` frontmatter, and the host's container kill. A skill that declares nothing runs unbounded up to the container kill.
