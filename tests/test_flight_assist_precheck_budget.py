@@ -36,11 +36,22 @@ def _declared_precheck_timeout_ms() -> int:
     Deliberately narrow — a bare integer scalar on its own line inside
     the leading `---` block, matching the shape the agent-runner's own
     frontmatter reader accepts (`readFrontmatterScalar` in
-    jbaruch/nanoclaw `container/agent-runner/src/skill-frontmatter.ts`).
+    jbaruch/nanoclaw `container/agent-runner/src/skill-frontmatter.ts`):
+    a leading BOM is tolerated, the block must START the file, and CRLF
+    is accepted.
+
+    Anchored with `re.match`, NOT `re.search` + `re.M`. The runtime
+    reader only accepts a block at offset 0, so a search that can latch
+    onto a later `---` (a markdown horizontal rule further down the
+    body) would let this test pass while the real reader sees no
+    declaration at all — the guard silently guarding nothing.
     """
-    text = SKILL_MD.read_text(encoding="utf-8")
-    match = re.search(r"^---\n(.*?)^---\s*$", text, re.S | re.M)
-    assert match, f"{SKILL_MD} has no leading YAML frontmatter block"
+    text = SKILL_MD.read_text(encoding="utf-8").lstrip("﻿")
+    match = re.match(r"---\r?\n(.*?)^---[ \t]*\r?$", text, re.S | re.M)
+    assert match, (
+        f"{SKILL_MD} has no leading YAML frontmatter block — the agent-runner "
+        "reads frontmatter only at offset 0, so nothing here is declared"
+    )
     frontmatter = match.group(1)
     declared = re.search(r"^precheck_timeout_ms:\s*(\d+)\s*$", frontmatter, re.M)
     assert declared, (
