@@ -20,7 +20,15 @@ TripIt-derived `travel-schedule.json` (written nightly by
 3. On a trip but before its first lodging event → the `Trip` segment's own
    `location` when present, else unresolved (`address=None`) — the caller
    surfaces "no drivable origin" instead of planning from home. The static
-   home is NEVER the anchor while a trip is active.
+   home is NEVER the anchor mid-trip.
+
+Rule 2/3 apply only from the moment the operator has actually left, though: the
+date-only `Trip` wrapper is "active" on the departure day itself, but before the
+trip's first flight departs the operator is still home. Anchoring the outbound
+airport-departure drive at the trip's destination there draws an absurd
+cross-country "drive" (a 34-hour San Francisco→BNA block for a BNA→SFO trip), so
+the static home wins until the first flight lifts off. A trip with no timed
+flight in the feed keeps the old behavior — nothing marks when it left home.
 
 The schedule file is host-group state owned by `nightly-travel-sync` (see
 its state-schema.md); this module is a non-owner READER per
@@ -185,6 +193,42 @@ def _active_trip(records: list[dict], on_day: date) -> dict | None:
     return active
 
 
+def _first_trip_flight_departure(
+    records: list[dict], trip_start: date | None, trip_end: date | None
+) -> datetime | None:
+    """The earliest timed `Flight` departure within the trip's date span, else None.
+
+    Marks when the operator physically leaves for the trip. Before it the
+    date-only Trip wrapper is already "active", but the planned position is still
+    home — the operator has not flown out yet. A trip with no timed flight in the
+    feed yields None, so the caller leaves the pre-flight anchor as it was.
+    """
+    earliest: datetime | None = None
+    for record in records:
+        if record.get("type") != "Flight":
+            continue
+        raw_start = record.get("start")
+        # Timed departures only. A date-only `YYYY-MM-DD` start parses to
+        # midnight, which would falsely mark the trip as already departed for
+        # the rest of that day and let a same-day pre-flight anchor fall through
+        # to the destination — the very bug this gate closes. Mirrors
+        # flight_windows; a date-only Flight leaves the anchor as it was.
+        if not (isinstance(raw_start, str) and "T" in raw_start):
+            continue
+        when = _parse_when(raw_start)
+        if when is None:
+            continue
+        if (
+            trip_start is not None
+            and trip_end is not None
+            and not (trip_start <= when.date() <= trip_end)
+        ):
+            continue
+        if earliest is None or when < earliest:
+            earliest = when
+    return earliest
+
+
 def resolve_anchor(
     schedule: list[dict] | None,
     *,
@@ -220,6 +264,20 @@ def resolve_anchor(
 
     trip_start = _parse_day(trip.get("start"))
     trip_end = _parse_day(trip.get("end"))
+
+    # Before the trip's first flight departs the operator is still home — the
+    # date-only Trip wrapper is "active" on the departure day, but anchoring the
+    # outbound airport-departure drive at the destination draws a cross-country
+    # "drive" (the 34-hour San Francisco→BNA block for a BNA→SFO trip). Home
+    # wins until the first flight lifts off; a flightless trip skips this.
+    first_departure = _first_trip_flight_departure(schedule, trip_start, trip_end)
+    if first_departure is not None and at_utc < first_departure:
+        return TripAnchor(
+            address=home_address,
+            source="home",
+            detail="before the trip's first flight departs",
+        )
+
     best = None
     best_when = None
     for record in schedule:

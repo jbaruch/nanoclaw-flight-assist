@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed — drive-engine: anchor the outbound airport drive at home, not the trip destination
+
+A BNA→SFO trip drew a ~34-hour `Drive: → BNA` block described "San Francisco, CA → BNA airport" — the outbound airport-departure drive resolved its origin at the trip's *destination* instead of home, so the engine computed a cross-country San-Francisco-to-Nashville "drive."
+
+`trip_origin.resolve_anchor` treated the date-only `Trip` wrapper as "on-trip" for the whole departure day, and with no lodging check-in yet it fell through to the trip's own `location` (the destination). But before the trip's first flight departs the operator is still home. `resolve_anchor` now gates on the trip's first timed `Flight` departure: for any instant before it, the anchor is home. Flights after departure (the #122 mid-trip case) are unaffected; a trip with no timed flight in the feed keeps the prior behavior. `tests/test_trip_origin.py` pins the outbound-departure regression and the departure-day-before-flight boundary.
+
 ## 0.2.73 — 2026-07-28
 
 ### Changed — flight-assist: declare its own precheck budget (jbaruch/nanoclaw#890)
