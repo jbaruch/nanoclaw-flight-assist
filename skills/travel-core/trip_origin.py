@@ -207,7 +207,15 @@ def _first_trip_flight_departure(
     for record in records:
         if record.get("type") != "Flight":
             continue
-        when = _parse_when(record.get("start"))
+        raw_start = record.get("start")
+        # Timed departures only. A date-only `YYYY-MM-DD` start parses to
+        # midnight, which would falsely mark the trip as already departed for
+        # the rest of that day and let a same-day pre-flight anchor fall through
+        # to the destination — the very bug this gate closes. Mirrors
+        # flight_windows; a date-only Flight leaves the anchor as it was.
+        if not (isinstance(raw_start, str) and "T" in raw_start):
+            continue
+        when = _parse_when(raw_start)
         if when is None:
             continue
         if (

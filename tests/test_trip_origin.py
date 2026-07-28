@@ -314,6 +314,36 @@ def test_outbound_departure_anchors_home_not_destination():
     assert anchor.source == "home"
 
 
+def test_date_only_flight_is_not_read_as_a_midnight_departure():
+    """A date-only `Flight` start (`YYYY-MM-DD`) carries no departure time. Read
+    as midnight it would falsely mark the trip as already departed — so an anchor
+    the day BEFORE the flight date (00:00Z of the flight day > the anchor) would
+    spuriously flip to home. Timed-only (mirroring flight_windows) ignores the
+    date-only flight, leaving the trip with no known departure, so the pre-lodging
+    anchor stays the trip location as the flightless contract prescribes. The
+    query sits before the would-be midnight so it discriminates the fix from the
+    midnight-parse bug."""
+    schedule = [
+        _record(
+            type="Trip",
+            summary="San Francisco 2025",
+            start="2025-08-16",
+            end="2025-08-20",
+            location="San Francisco, CA",
+        ),
+        _record(
+            type="Flight",
+            summary="BNA to SFO",
+            start="2025-08-17",
+            end="2025-08-17",
+            location="Nashville International Airport",
+        ),
+    ]
+    anchor = resolve_anchor(schedule, at=_at("2025-08-16T10:00:00Z"), home_address=HOME)
+    assert anchor.address == "San Francisco, CA"
+    assert anchor.source == "trip_location"
+
+
 def test_flightless_trip_keeps_pre_departure_trip_location():
     """A trip with no timed flight in the feed has nothing marking when the
     operator left home, so the pre-lodging anchor stays the trip location — the
