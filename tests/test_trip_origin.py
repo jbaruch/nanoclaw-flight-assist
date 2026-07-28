@@ -267,12 +267,69 @@ def test_lodging_with_blank_location_is_skipped():
     assert anchor.source == "trip_location"
 
 
-def test_trip_span_boundary_days_are_on_trip():
-    """Both endpoint dates of the date-only Trip wrapper count as
-    traveling — the safe direction for the #122 failure mode."""
-    for boundary in ("2025-06-26T02:00:00Z", "2025-07-13T22:00:00Z"):
-        anchor = resolve_anchor(_uk_trip_schedule(), at=_at(boundary), home_address=HOME)
-        assert anchor.source != "home", boundary
+def test_departure_day_before_first_flight_resolves_home():
+    """On the departure day but before the trip's first flight lifts off the
+    operator is still home — the date-only Trip wrapper is already 'active', but
+    anchoring the outbound airport-departure drive at the destination is what
+    drew the 34-hour cross-country block. The BNA→LHR flight departs
+    2025-06-26T19:00Z; at 02:00Z that morning home wins."""
+    anchor = resolve_anchor(_uk_trip_schedule(), at=_at("2025-06-26T02:00:00Z"), home_address=HOME)
+    assert anchor.address == HOME
+    assert anchor.source == "home"
+
+
+def test_return_end_boundary_day_is_still_on_trip():
+    """The trip-end boundary date stays on-trip (last lodging wins) — the safe
+    direction for the #122 failure mode is unchanged after the first flight has
+    departed."""
+    anchor = resolve_anchor(_uk_trip_schedule(), at=_at("2025-07-13T22:00:00Z"), home_address=HOME)
+    assert anchor.source != "home"
+
+
+def test_outbound_departure_anchors_home_not_destination():
+    """Regression for the live San Francisco→BNA block: a BNA→SFO trip whose
+    outbound airport-departure drive resolved its origin at the trip's
+    destination (SFO's city) instead of home, drawing a ~34-hour cross-country
+    'drive'. The departure drive's origin instant is before the outbound flight,
+    so it must anchor at home."""
+    schedule = [
+        _record(
+            type="Trip",
+            summary="San Francisco 2025",
+            start="2025-08-16",
+            end="2025-08-20",
+            location="San Francisco, CA",
+        ),
+        _record(
+            type="Flight",
+            summary="BNA to SFO",
+            start="2025-08-17T10:20:00Z",
+            end="2025-08-17T15:00:00Z",
+            location="Nashville International Airport",
+        ),
+    ]
+    # The outbound airport-departure drive leaves ~an hour before wheels-up.
+    anchor = resolve_anchor(schedule, at=_at("2025-08-17T09:15:00Z"), home_address=HOME)
+    assert anchor.address == HOME
+    assert anchor.source == "home"
+
+
+def test_flightless_trip_keeps_pre_departure_trip_location():
+    """A trip with no timed flight in the feed has nothing marking when the
+    operator left home, so the pre-lodging anchor stays the trip location — the
+    gate only fires when a first-flight departure is known."""
+    schedule = [
+        _record(
+            type="Trip",
+            summary="Road trip 2025",
+            start="2025-08-16",
+            end="2025-08-20",
+            location="Asheville, NC",
+        ),
+    ]
+    anchor = resolve_anchor(schedule, at=_at("2025-08-16T02:00:00Z"), home_address=HOME)
+    assert anchor.address == "Asheville, NC"
+    assert anchor.source == "trip_location"
 
 
 def test_off_trip_none_home_is_none_with_home_source():
