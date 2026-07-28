@@ -123,8 +123,21 @@ _BYAIR_CALL_TIMEOUT_SECONDS = 8.0
 _MAPS_CALL_TIMEOUT_SECONDS = 8.0
 
 # Wall-clock budget for the whole poll loop. The agent-runner hard-kills the
-# precheck process at SCRIPT_TIMEOUT_MS = 30s (container/agent-runner/src/index.ts)
-# and surfaces the kill as `execfile-error`. Polls run sequentially, so several
+# precheck process at the budget this skill declares for itself —
+# `precheck_timeout_ms: 30000` in SKILL.md — and surfaces the kill as
+# `execfile-error`.
+#
+# That declaration and `_SCRIPT_KILL_BUDGET_SECONDS` below are ONE number in two
+# places and MUST move together; the constant is the seconds form of the
+# frontmatter value. Before jbaruch/nanoclaw#890 the 30s was a flat global the
+# agent-runner applied to every precheck, so this constant only had to match a
+# fleet-wide fact. #890 made the budget per-skill and removed the global: a
+# skill that declares nothing now runs unbounded up to the container kill.
+# flight-assist keeps an explicit 30s because it fires every 2 minutes — a
+# wedged cycle running to the container timeout would still be holding the
+# maintenance slot when the next fire is due.
+#
+# Polls run sequentially, so several
 # active flights on slow upstreams each pay up to _BYAIR_CALL_TIMEOUT_SECONDS and
 # their sum can exceed 30s — killing the whole cycle. #28 bounded each call but
 # not the cumulative total. `_run_cycle` stops starting new polls once this

@@ -4,6 +4,7 @@ description: On a byAir precheck wake event, reconciles the operator's managed c
 cadence: "*/2 * * * *"
 agentModel: "claude-haiku-4-5-20251001"
 script: "precheck.py"
+precheck_timeout_ms: 30000
 ---
 
 # Flight Assist

@@ -1,5 +1,13 @@
 # Changelog
 
+### Changed — flight-assist: declare its own precheck budget (jbaruch/nanoclaw#890)
+
+`jbaruch/nanoclaw#890` removed the flat 30s precheck kill the agent-runner applied to every skill. Two timeouts bound a precheck now: what the skill declares via `precheck_timeout_ms` frontmatter, and the host's container kill. A skill that declares nothing runs unbounded up to the container kill.
+
+flight-assist declares `precheck_timeout_ms: 30000`, keeping exactly the budget it had. It is the one skill in the fleet that should: it fires every 2 minutes, so a wedged cycle running to the container timeout would still be holding the maintenance slot when the next fire is due. Every other travel precheck declares nothing deliberately — `drive-engine` especially, whose cold sweep is the reason #890 exists.
+
+The declaration and `_SCRIPT_KILL_BUDGET_SECONDS` in `precheck.py` are one number in two places; `_run_cycle` sizes its poll loop against the constant so a poll started at the budget edge still returns before the kill. Previously the 30s was a fleet-wide global nothing could desync. `tests/test_flight_assist_precheck_budget.py` pins them together and asserts the loop still leaves room for one in-flight poll.
+
 ## 0.2.72 — 2026-07-27
 
 ### Fixed — drive-engine: drop the plan-phase time budget that froze the calendar (#211)
