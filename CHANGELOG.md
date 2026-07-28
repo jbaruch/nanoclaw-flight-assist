@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.74 — 2026-07-28
+
 ### Fixed — drive-engine: anchor the outbound airport drive at home, not the trip destination
 
 A BNA→SFO trip drew a ~34-hour `Drive: → BNA` block described "San Francisco, CA → BNA airport" — the outbound airport-departure drive resolved its origin at the trip's *destination* instead of home, so the engine computed a cross-country San-Francisco-to-Nashville "drive."
