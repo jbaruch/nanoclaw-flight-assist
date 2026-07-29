@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.75 — 2026-07-29
+
 ### Fixed — drive-engine: a same-day layover with a destination-hotel check-in drew a bogus connection drive
 
 A BNA→DTW→CDG→TLV trip drew a `Drive: CDG → Tel Aviv-Yafo` block — a ground drive from a Paris layover to Israel. The CDG connection was misclassified as an overnight because the Crowne Plaza Tel Aviv **check-in** (12:00Z = 15:00 local) fell inside the same-day CDG layover window (06:40Z–14:25Z). TripIt records hotel check-in / check-out at nominal local times, so a destination hotel reached only by a *later* flight can show a check-in timestamp that lands in an earlier daytime layover.
