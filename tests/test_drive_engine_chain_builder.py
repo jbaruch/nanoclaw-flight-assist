@@ -112,6 +112,33 @@ def test_pair_context_overnight_from_lodging():
     assert ctxs[0].operator_left_terminal is False
 
 
+def test_pair_context_same_day_layover_is_not_overnight():
+    """The CDG regression: a same-day layover whose window happens to contain a
+    DESTINATION hotel's nominal check-in must NOT read as an overnight. TripIt
+    records a nominal mid-afternoon check-in, so a Tel Aviv hotel (reached only by
+    the LATER CDG→TLV flight) shows a 12:00Z check-in that lands inside the daytime
+    06:40Z–14:25Z Paris layover. A real overnight crosses a night; this doesn't."""
+    chain = [
+        flight("DTW", "CDG", _dt(4, day=12), _dt(6, 40, day=12), fid=1, trip_id=1),
+        flight("CDG", "TLV", _dt(14, 25, day=12), _dt(18, 55, day=12), fid=2, trip_id=1),
+    ]
+    schedule = [{"type": "Lodging", "start": "2020-07-12T12:00:00Z", "location": "Tel Aviv Hotel"}]
+    ctxs = build_pair_contexts(chain, schedule=schedule)
+    assert ctxs[0].lodging_between is False
+
+
+def test_pair_context_cross_night_layover_with_lodging_is_overnight():
+    """The genuine overnight the same-day gate must preserve: the gap crosses
+    midnight, so a lodging check-in inside it still breaks the chain."""
+    chain = [
+        flight("DTW", "CDG", _dt(18, day=12), _dt(22, day=12), fid=1, trip_id=1),
+        flight("CDG", "TLV", _dt(8, day=13), _dt(12, day=13), fid=2, trip_id=1),
+    ]
+    schedule = [{"type": "Lodging", "start": "2020-07-12T23:00:00Z", "location": "CDG Hotel"}]
+    ctxs = build_pair_contexts(chain, schedule=schedule)
+    assert ctxs[0].lodging_between is True
+
+
 def test_pair_context_left_terminal_predicate_threaded():
     chain = [
         flight("CPH", "CPH", _dt(9), _dt(10), fid=1, trip_id=1),

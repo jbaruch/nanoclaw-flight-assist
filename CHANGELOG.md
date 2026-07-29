@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed — drive-engine: a same-day layover with a destination-hotel check-in drew a bogus connection drive
+
+A BNA→DTW→CDG→TLV trip drew a `Drive: CDG → Tel Aviv-Yafo` block — a ground drive from a Paris layover to Israel. The CDG connection was misclassified as an overnight because the Crowne Plaza Tel Aviv **check-in** (12:00Z = 15:00 local) fell inside the same-day CDG layover window (06:40Z–14:25Z). TripIt records hotel check-in / check-out at nominal local times, so a destination hotel reached only by a *later* flight can show a check-in timestamp that lands in an earlier daytime layover.
+
+`build_pair_contexts` now sets `lodging_between` only when a lodging check-in falls in the gap **and** the gap spans a night (arrival and departure on different UTC days — `_spans_overnight`). A real overnight crosses midnight; a same-day layover cannot be one however a nominal check-in time lands in it. The genuine Tel Aviv stay (Aug 2 → Aug 6) still crosses a day boundary and keeps its drives. `tests/test_drive_engine_chain_builder.py` pins both the same-day regression and the cross-night overnight.
+
 ## 0.2.74 — 2026-07-28
 
 ### Fixed — drive-engine: anchor the outbound airport drive at home, not the trip destination
