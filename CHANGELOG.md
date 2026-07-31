@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.77 — 2026-07-31
+
 ### Fixed — nightly-travel-sync: cadence cap no longer near-misses and skips (jbaruch/nanoclaw#803)
 
 The precheck's `CADENCE` cap was `timedelta(days=3)` — an exact 3× multiple of the daily cron. The cursor stamps at run completion, so every third daily fire found `travel-db.json` ~71.8h old (< 72h) and skipped, slipping the run by a whole period — which is why the sync stopped running and the OOO home-midnight migration never applied. The cap is now `timedelta(hours=60)`: same every-third-day intent, but a half-period under the multiple with slack for run latency and DST (per nanoclaw-host `rules/overlay-tile-authoring.md`). Adds the mandated near-miss regression test — a cursor just under the 72h multiple must still wake.
