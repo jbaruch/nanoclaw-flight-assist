@@ -15,8 +15,9 @@ Per-leg endpoint resolution (the routing ↔ leave-by ↔ origin interplay of §
 - departure: dest = departure airport (fixed); origin = `position_at(anchor)`, then
   routed, then GPS-overlaid when imminent, then re-routed from the resolved origin.
   leave_by = arrive_by − routed drive.
-- arrival: origin = arrival airport (fixed); dest = `position_at(depart_after)`. The
-  drive starts at depart_after; no GPS overlay (the operator is at the airport).
+- arrival: origin = arrival airport (fixed); a home-originating round trip that
+  closes at its opening airport returns home, otherwise dest =
+  `position_at(depart_after)`. The drive starts at depart_after; no GPS overlay.
 - transfer: both endpoints fixed airports; leave_by = window_end − routed drive.
 
 A leg whose non-fixed endpoint cannot be resolved to an address (`position_at`
@@ -180,16 +181,23 @@ def _build_arrival(
     *,
     schedule: list[dict] | None,
     home_address: str | None,
+    return_home: bool,
     route: RouteFn,
     boarding_present: BoardingPresentFn,
 ) -> tuple[DesiredBlock | None, str | None]:
     anchor = leg.anchor
     assert anchor is not None and leg.origin_airport is not None
     origin = _airport_place(leg.origin_airport)
-    planned = position_at(schedule, anchor, home_address=home_address)
-    if planned.address is None:
+    if return_home:
+        destination = home_address
+        destination_label = "home"
+    else:
+        planned = position_at(schedule, anchor, home_address=home_address)
+        destination = planned.address
+        destination_label = _dest_label(planned)
+    if destination is None:
         return None, f"arrival {leg_identity(leg)}: no destination (position_at unresolved)"
-    drive = route(origin, planned.address)
+    drive = route(origin, destination)
     if drive is None:
         return None, f"arrival {leg_identity(leg)}: route failed"
     if is_trivial_leg(drive, presence_block_present=boarding_present(leg.flight)):
@@ -198,11 +206,11 @@ def _build_arrival(
         DesiredBlock(
             identity=leg_identity(leg),
             kind="airport_arrival",
-            summary=f"Drive: {leg.origin_airport} → {_dest_label(planned)}",
+            summary=f"Drive: {leg.origin_airport} → {destination_label}",
             start=anchor,
             end=anchor + drive,
             origin=origin,
-            destination=planned.address,
+            destination=destination,
             baseline_seconds=int(drive.total_seconds()),
             anchor=anchor,
             timezone=leg.timezone,
@@ -281,7 +289,10 @@ def build_reconcile_plan(
 
     for chain in chains:
         contexts = build_pair_contexts(chain, schedule=schedule, left_terminal=left_terminal)
-        for planned in plan_chain_legs(chain, contexts):
+        planned_legs = plan_chain_legs(chain, contexts)
+        closes_at_opening_airport = chain[0].dep_airport == chain[-1].arr_airport
+        opening_from_home = False
+        for planned in planned_legs:
             # plan_chain_legs guarantees the right endpoint per kind, but narrow it
             # explicitly here so _facts_for receives a non-None flight (no ignore).
             if planned.kind is LegKind.AIRPORT_TRANSFER:
@@ -307,6 +318,11 @@ def build_reconcile_plan(
                 concrete = resolve_leg_anchor(
                     planned, facts=_facts_for(flight, airport_info), overrides=overrides
                 )
+                if flight is chain[0]:
+                    opening_anchor = concrete.anchor
+                    assert opening_anchor is not None
+                    opening = position_at(schedule, opening_anchor, home_address=home_address)
+                    opening_from_home = opening.source == "home" and opening.address is not None
                 if _leg_past(planned.kind, concrete, now):
                     skipped.append(f"departure {leg_identity(concrete)}: past, skipped")
                     continue
@@ -334,6 +350,9 @@ def build_reconcile_plan(
                     concrete,
                     schedule=schedule,
                     home_address=home_address,
+                    return_home=(
+                        flight is chain[-1] and closes_at_opening_airport and opening_from_home
+                    ),
                     route=route,
                     boarding_present=boarding_present,
                 )

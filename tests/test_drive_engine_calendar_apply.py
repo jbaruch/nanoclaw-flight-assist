@@ -276,21 +276,24 @@ def test_budget_defers_writes_past_the_deadline():
     assert len(comp.created) == 2
 
 
-def test_budget_runs_deletes_before_creates():
-    """Deletes (dedup/orphan cleanup) get budget priority — they run first, so a
-    duplicate backlog drains even when the sweep can't also create this cycle."""
+def test_budget_applies_current_corrections_before_cleanup_backlog():
+    """Current corrections cannot wait behind a duplicate/orphan backlog."""
     plan = ReconcilePlan(
         deletes=(Delete("d1", "orphan"), Delete("d2", "orphan")),
         creates=(Create(_desired(identity="m1")), Create(_desired(identity="m2"))),
+        updates=(Update("old1", _desired(identity="u1")),),
     )
     comp = FakeCalendar()
     result = apply_plan(
         plan, calendar=comp, calendar_id="primary", budget_seconds=2.5, monotonic=_Clock()
     )
-    assert result.deleted == 2
-    assert result.created == 0
-    assert result.deferred == 2
-    assert set(comp.deleted) == {"d1", "d2"}
+    assert result.updated == 1
+    assert result.created == 1
+    assert result.deleted == 0
+    assert result.deferred == 3
+    assert [patch["event_id"] for patch in comp.patched] == ["old1"]
+    assert len(comp.created) == 1
+    assert comp.deleted == []
 
 
 def test_no_budget_applies_everything():

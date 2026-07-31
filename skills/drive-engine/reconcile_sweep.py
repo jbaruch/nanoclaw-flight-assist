@@ -65,7 +65,8 @@ SWEEP_WINDOW = timedelta(days=14)
 # block-shape change be validated against the production calendar before the
 # cutover applies anything. The rendering itself lives in `shadow.py`.
 _SHADOW_ENV = "DRIVE_ENGINE_SHADOW"
-_SHADOW_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_UNBOUNDED_APPLY_ENV = "DRIVE_ENGINE_UNBOUNDED_APPLY"
+_ENV_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 # Wall-clock budget for the APPLY (write) phase only. There is no plan-phase
 # deadline: `reconcile_sweep` is a deterministic script with no LLM to bound, so
@@ -74,15 +75,10 @@ _SHADOW_TRUTHY = frozenset({"1", "true", "yes", "on"})
 # The plan phase runs to completion, bounded only by the per-call network
 # timeouts below.
 #
-# The write phase still needs a bound: the host kills this precheck at ~30s
-# (#164, SCRIPT_TIMEOUT_MS in the agent-runner), so `apply_plan` stops STARTING
-# new ops once this budget is spent, returns a clean payload, and defers the rest
-# to the next (idempotent) sweep. This is a FIXED budget, decoupled from how long
-# the plan phase took — the old `budget - plan_elapsed` formula starved apply to
-# 0 whenever planning ran long (#211). A cold sweep (many first-seen airports)
-# can push plan_elapsed + this past the current 30s host kill; the mid-apply kill
-# is idempotent-safe (deferred ops drain next sweep) and jbaruch/nanoclaw#890
-# tracks a per-skill precheck-timeout override for real headroom.
+# Scheduled writes keep a short bound so a large cleanup plan returns a payload
+# and releases the maintenance slot. The budget is fixed and independent of plan
+# duration. `DRIVE_ENGINE_UNBOUNDED_APPLY=1` disables only this write bound for an
+# operator-run repair sweep; network calls retain their per-call timeouts.
 _APPLY_PHASE_BUDGET_SECONDS = 20.0
 
 # Per-call timeout for the sweep's own maps client (the shared default is 10s).
@@ -442,7 +438,14 @@ def _shadow_mode() -> bool:
     Off unless explicitly set to a truthy value, so the scheduled sweep applies
     as normal; an operator opts a single run in from the shell (#156 R4, #183).
     """
-    return os.environ.get(_SHADOW_ENV, "").strip().lower() in _SHADOW_TRUTHY
+    return os.environ.get(_SHADOW_ENV, "").strip().lower() in _ENV_TRUTHY
+
+
+def _apply_budget_seconds() -> float | None:
+    """The scheduled write budget, or None for an explicit repair run."""
+    if os.environ.get(_UNBOUNDED_APPLY_ENV, "").strip().lower() in _ENV_TRUTHY:
+        return None
+    return _APPLY_PHASE_BUDGET_SECONDS
 
 
 def finish_sweep(
@@ -463,15 +466,10 @@ def finish_sweep(
     parses, so writing the diff there would corrupt the contract — and returns
     BEFORE `apply` is called, so a shadow run cannot touch the calendar.
 
-    LIVE: gives apply a FIXED write-phase budget (`_APPLY_PHASE_BUDGET_SECONDS`),
-    independent of how long the plan phase took, so the write phase bounds its own
-    duration and defers the rest to the next idempotent sweep (#164). This bounds
-    the WRITE phase, not the whole sweep: on a warm sweep the total stays under
-    the host precheck kill, but a long cold plan plus this budget can still exceed
-    it — the mid-apply kill is idempotent-safe (deferred ops drain next sweep) and
-    jbaruch/nanoclaw#890 tracks real headroom. Decoupling from plan elapsed is the
-    #211 fix — the old `budget - elapsed` starved apply to 0 when planning ran
-    long."""
+    LIVE: gives scheduled apply a fixed write-phase budget, independent of plan
+    duration, and defers the remainder to the next idempotent sweep. An explicit
+    `DRIVE_ENGINE_UNBOUNDED_APPLY=1` repair run passes no write budget and drains
+    the complete plan. Per-call network timeouts remain active in both modes."""
     if _shadow_mode():
         print(render_plan(plan), file=sys.stderr)
         for line in skipped:
@@ -482,7 +480,7 @@ def finish_sweep(
         plan,
         calendar=calendar,
         calendar_id="primary",
-        budget_seconds=_APPLY_PHASE_BUDGET_SECONDS,
+        budget_seconds=_apply_budget_seconds(),
     )
 
     for line in skipped:
