@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.76 — 2026-07-31
+
 ### Fixed — drive-engine: reconcile now sees far-future blocks, ending the duplicate storm
 
 Desired airport legs are anchored to flight times across the whole itinerary (months out) with no future bound, but the reconcile fetched *current* blocks only `now+21d`. Every leg past 21 days was desired-but-never-matched, so each 30-minute sweep created a fresh block and never deduped the pile — a trip weeks out accumulated dozens of identical `Drive: → OSL` / `Drive: → AMS` blocks, and stale/suppressed legs (a `Drive: Oslo → AMS` from an obsolete plan) were never orphan-deleted.
