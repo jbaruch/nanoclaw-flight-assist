@@ -3,8 +3,10 @@
 Locks down the cadence-gate contract per `coding-policy: testing-standards`:
 
   - travel-db.json missing → wake (reason `no_travel_db`)
-  - mtime within the 3-day cadence → skip (reason `within_cadence`)
-  - mtime at/over the 3-day cadence → wake (reason `cadence_elapsed`)
+  - mtime within the 60h cadence → skip (reason `within_cadence`)
+  - mtime at/over the 60h cadence → wake (reason `cadence_elapsed`)
+  - a cursor just under the 3-day cron multiple still wakes (the #803
+    near-miss regression the 60h cap — not 72h — exists to prevent)
   - mtime in the future → wake (reason `db_mtime_future`)
   - main() emits exactly one line of valid JSON and exits 0
   - main() fails OPEN (wake) on an unexpected internal error
@@ -23,6 +25,11 @@ _NOW = datetime(2026, 5, 31, 6, 0, 0, tzinfo=timezone.utc)
 
 def _set_age(path, days_ago):
     target = (_NOW - timedelta(days=days_ago)).timestamp()
+    os.utime(str(path), (target, target))
+
+
+def _set_age_hours(path, hours_ago):
+    target = (_NOW - timedelta(hours=hours_ago)).timestamp()
     os.utime(str(path), (target, target))
 
 
@@ -54,11 +61,35 @@ def test_two_day_old_db_still_within_cadence(nightly_travel_sync_precheck):
     assert payload["data"]["reason"] == "within_cadence"
 
 
-def test_three_day_old_db_wakes(nightly_travel_sync_precheck):
-    """Boundary: age >= CADENCE (3 days) wakes."""
+def test_just_under_cadence_skips(nightly_travel_sync_precheck):
+    """59h < CADENCE (60h) → still within."""
     module, db_path = nightly_travel_sync_precheck
     db_path.write_text("{}")
-    _set_age(db_path, days_ago=3)
+    _set_age_hours(db_path, hours_ago=59)
+    payload = module.decide(_NOW, db_path)
+    assert payload["wake_agent"] is False
+    assert payload["data"]["reason"] == "within_cadence"
+
+
+def test_at_cadence_boundary_wakes(nightly_travel_sync_precheck):
+    """Boundary: age >= CADENCE (60h) wakes."""
+    module, db_path = nightly_travel_sync_precheck
+    db_path.write_text("{}")
+    _set_age_hours(db_path, hours_ago=60)
+    payload = module.decide(_NOW, db_path)
+    assert payload["wake_agent"] is True
+    assert payload["data"]["reason"] == "cadence_elapsed"
+
+
+def test_near_miss_just_under_three_day_multiple_wakes(nightly_travel_sync_precheck):
+    """#803 regression: a cursor stamped just under the 3-day (72h) cron multiple
+    MUST wake. With the old exact-3-day cap the cursor — stamped at run completion,
+    so ~71.9h old at the third daily fire — read as < 72h and skipped forever,
+    slipping the run by a whole period. The 60h cap sits below the multiple, so
+    71.9h ≥ 60h wakes."""
+    module, db_path = nightly_travel_sync_precheck
+    db_path.write_text("{}")
+    _set_age_hours(db_path, hours_ago=72 - (5 / 60))  # 3 days minus 5 minutes
     payload = module.decide(_NOW, db_path)
     assert payload["wake_agent"] is True
     assert payload["data"]["reason"] == "cadence_elapsed"
