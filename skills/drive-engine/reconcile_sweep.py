@@ -655,9 +655,13 @@ def _latest_itinerary_instant(records: list[dict], tripit_flights: list) -> date
     orphan-delete — every far-future block. A fetch that stopped short left legs
     beyond it desired-but-never-matched, so each sweep created a fresh block and
     never drained the pile (the far-future duplicate storm). byAir records carry
-    ISO strings; TripIt flights carry already-parsed UTC datetimes. Arrival wins
-    over departure (a drive-home leg sits after landing); a flight contributes
-    nothing when neither instant is available.
+    RFC3339 ISO strings with an explicit offset; TripIt flights carry
+    already-parsed UTC datetimes. Arrival wins over departure (a drive-home leg
+    sits after landing); a flight contributes nothing when neither instant is
+    available. A tz-naive byAir time is malformed state (an offset is required)
+    and is skipped, never coerced — the same rule as
+    `_near_term_departure_airport_ids`, so corrupted data can't silently stretch
+    the fetch horizon.
     """
     instants: list[datetime] = []
     for flight in tripit_flights:
@@ -673,7 +677,7 @@ def _latest_itinerary_instant(records: list[dict], tripit_flights: list) -> date
         except ValueError:
             continue
         if inst.tzinfo is None:
-            inst = inst.replace(tzinfo=timezone.utc)
+            continue
         instants.append(inst.astimezone(timezone.utc))
     return max(instants) if instants else None
 

@@ -524,11 +524,17 @@ def test_latest_itinerary_instant_spans_both_sources_and_prefers_arrival():
     assert _latest_itinerary_instant(records, tripit) == datetime(2020, 9, 6, 18, 0, tzinfo=UTC)
 
 
-def test_latest_itinerary_instant_falls_back_to_departure_and_normalizes_tz():
-    """A byAir record with only a departure time still contributes; a tz-naive
-    string is read as UTC (the feed's own convention)."""
-    records = [{"scheduled_dep_time": "2020-08-01T12:00:00"}]  # naive → UTC
+def test_latest_itinerary_instant_falls_back_to_departure_time():
+    """A byAir record with only a (properly offset) departure time still counts."""
+    records = [{"scheduled_dep_time": "2020-08-01T12:00:00+00:00"}]
     assert _latest_itinerary_instant(records, []) == datetime(2020, 8, 1, 12, 0, tzinfo=UTC)
+
+
+def test_latest_itinerary_instant_skips_tz_naive_byair_time():
+    """A tz-naive byAir timestamp is malformed (an offset is required) and is
+    skipped, not coerced to UTC — matching `_near_term_departure_airport_ids`, so
+    corrupted state can't silently stretch the fetch horizon."""
+    assert _latest_itinerary_instant([{"scheduled_dep_time": "2020-08-01T12:00:00"}], []) is None
 
 
 def test_near_term_departure_ids_selects_within_window_only():
