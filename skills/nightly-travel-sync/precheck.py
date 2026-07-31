@@ -2,7 +2,7 @@
 """Cadence precheck for `tessl__nightly-travel-sync`.
 
 Fires daily via the cadence-registry (`0 6 * * * (TZ=local)`). Gates the
-wake on a 3-day filesystem cadence cap anchored on the bundle's terminal
+wake on a 60-hour filesystem cadence cap anchored on the bundle's terminal
 artifact, `/workspace/group/travel-db.json` — the file Step 4 rebuilds
 last and the one downstream consumers (`check-travel-bookings`,
 `morning-brief`) actually read.
@@ -19,7 +19,7 @@ separate cursor file is owned, so the gate adds no self-owned state per
 
 Wake conditions:
   - travel-db.json missing (cold start, or pruned) — wake.
-  - travel-db.json mtime older than CADENCE (3 days) — wake.
+  - travel-db.json mtime older than CADENCE (60h) — wake.
   - mtime in the future (clock skew / bad write) — wake so the next run
     rewrites it.
   - within cadence — skip silently.
@@ -44,7 +44,13 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-CADENCE = timedelta(days=3)
+# 60h, deliberately NOT the exact 3-day (72h) multiple of the daily cron. The
+# cursor stamps at run completion, so an exact-multiple cap near-misses: every
+# third daily fire finds the cursor ~71.8h old (< 72h) and skips forever, slipping
+# the run by a whole period (jbaruch/nanoclaw#803). 60h keeps the every-third-day
+# intent while sitting a half-period under the multiple, with slack for run
+# latency and DST — see nanoclaw-host: rules/overlay-tile-authoring.md.
+CADENCE = timedelta(hours=60)
 DEFAULT_DB_PATH = "/workspace/group/travel-db.json"
 
 
