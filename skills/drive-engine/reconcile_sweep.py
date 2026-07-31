@@ -647,6 +647,37 @@ def _near_term_departure_airport_ids(records: list[dict], now: datetime) -> set[
     return ids
 
 
+def _latest_itinerary_instant(records: list[dict], tripit_flights: list) -> datetime | None:
+    """The latest flight instant across both sources (tz-aware UTC), or None.
+
+    Desired airport legs are anchored to flight times with NO future bound, so the
+    current-blocks fetch must reach at least this far to see — and dedupe /
+    orphan-delete — every far-future block. A fetch that stopped short left legs
+    beyond it desired-but-never-matched, so each sweep created a fresh block and
+    never drained the pile (the far-future duplicate storm). byAir records carry
+    ISO strings; TripIt flights carry already-parsed UTC datetimes. Arrival wins
+    over departure (a drive-home leg sits after landing); a flight contributes
+    nothing when neither instant is available.
+    """
+    instants: list[datetime] = []
+    for flight in tripit_flights:
+        inst = getattr(flight, "scheduled_arr", None) or getattr(flight, "scheduled_dep", None)
+        if isinstance(inst, datetime):
+            instants.append(inst.astimezone(timezone.utc))
+    for record in records:
+        raw = record.get("scheduled_arr_time") or record.get("scheduled_dep_time")
+        if not isinstance(raw, str) or not raw:
+            continue
+        try:
+            inst = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if inst.tzinfo is None:
+            inst = inst.replace(tzinfo=timezone.utc)
+        instants.append(inst.astimezone(timezone.utc))
+    return max(instants) if instants else None
+
+
 def _persist_static_facts_best_effort(static_facts: dict[int, StaticAirport]) -> None:
     """Persist the airport-facts cache, swallowing write errors (#211 review).
 
@@ -829,11 +860,21 @@ def _run_sweep() -> dict:
     )
 
     # --- current blocks ---
+    # The fetch MUST cover every desired airport leg. Those legs are anchored to
+    # flight times across the whole itinerary (months out), with no future bound,
+    # so a fixed +21d window left every farther leg unmatched — a fresh block each
+    # sweep, never deduped: the far-future duplicate storm. Extend time_max past
+    # the last flight so reconcile can see and drain those piles. The +21d floor
+    # keeps a sensible minimum when the itinerary is empty or entirely near-term.
+    blocks_time_max = now + timedelta(days=21)
+    latest_flight = _latest_itinerary_instant(records, tripit_flights)
+    if latest_flight is not None:
+        blocks_time_max = max(blocks_time_max, latest_flight + timedelta(days=1))
     raw = calendar.find_events(
         _find_events_args(
             calendar_id="primary",
             time_min=(now - timedelta(days=2)).isoformat(),
-            time_max=(now + timedelta(days=21)).isoformat(),
+            time_max=blocks_time_max.isoformat(),
         )
     )
     current_blocks = [b for b in (parse_block(e) for e in _items(raw)) if b is not None]
