@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed — drive-engine: reconcile now sees far-future blocks, ending the duplicate storm
+
+Desired airport legs are anchored to flight times across the whole itinerary (months out) with no future bound, but the reconcile fetched *current* blocks only `now+21d`. Every leg past 21 days was desired-but-never-matched, so each 30-minute sweep created a fresh block and never deduped the pile — a trip weeks out accumulated dozens of identical `Drive: → OSL` / `Drive: → AMS` blocks, and stale/suppressed legs (a `Drive: Oslo → AMS` from an obsolete plan) were never orphan-deleted.
+
+`reconcile_sweep` now extends the current-blocks fetch `time_max` past the last flight instant across both flight sources (`_latest_itinerary_instant`), keeping a `+21d` floor. With the far-future blocks in view, `plan_reconcile`'s existing dedup (keep one per identity, delete the rest) and orphan-deletion drain the piles and remove stale legs over the next sweeps. `tests/test_drive_engine_reconcile_sweep.py` pins the horizon across both sources.
+
 ## 0.2.75 — 2026-07-29
 
 ### Fixed — drive-engine: a same-day layover with a destination-hotel check-in drew a bogus connection drive

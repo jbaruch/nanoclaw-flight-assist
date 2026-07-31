@@ -32,6 +32,7 @@ from reconcile import Create, Delete, DesiredBlock, ReconcilePlan  # noqa: E402
 from reconcile_sweep import (  # noqa: E402
     AirportUnresolved,
     ResolvedAirport,
+    _latest_itinerary_instant,
     _make_airport_resolver,
     _near_term_departure_airport_ids,
     _persist_static_facts_best_effort,
@@ -500,6 +501,40 @@ def test_persist_facts_calls_store_on_happy_path(monkeypatch, capsys):
     _persist_static_facts_best_effort({3: StaticAirport(iata="JFK")})
     assert saved == [{3: StaticAirport(iata="JFK")}]
     assert capsys.readouterr().err == ""  # silent on success
+
+
+def test_latest_itinerary_instant_none_when_no_flights():
+    assert _latest_itinerary_instant([], []) is None
+
+
+def test_latest_itinerary_instant_spans_both_sources_and_prefers_arrival():
+    """The fetch horizon must reach the LAST flight instant across byAir records
+    and TripIt flights — a far-future TripIt segment (months out) must win over a
+    near-term byAir record, else its block sits beyond the window and dupes every
+    sweep. Arrival wins over departure so a drive-home leg is covered."""
+    records = [
+        {
+            "scheduled_dep_time": "2020-07-11T06:00:00+00:00",
+            "scheduled_arr_time": "2020-07-11T09:00:00+00:00",
+        },
+    ]
+    tripit = [
+        _tripit_flight("BNA", "OSL", "2020-09-06T10:00:00+00:00", "2020-09-06T18:00:00+00:00"),
+    ]
+    assert _latest_itinerary_instant(records, tripit) == datetime(2020, 9, 6, 18, 0, tzinfo=UTC)
+
+
+def test_latest_itinerary_instant_falls_back_to_departure_time():
+    """A byAir record with only a (properly offset) departure time still counts."""
+    records = [{"scheduled_dep_time": "2020-08-01T12:00:00+00:00"}]
+    assert _latest_itinerary_instant(records, []) == datetime(2020, 8, 1, 12, 0, tzinfo=UTC)
+
+
+def test_latest_itinerary_instant_skips_tz_naive_byair_time():
+    """A tz-naive byAir timestamp is malformed (an offset is required) and is
+    skipped, not coerced to UTC — matching `_near_term_departure_airport_ids`, so
+    corrupted state can't silently stretch the fetch horizon."""
+    assert _latest_itinerary_instant([{"scheduled_dep_time": "2020-08-01T12:00:00"}], []) is None
 
 
 def test_near_term_departure_ids_selects_within_window_only():
