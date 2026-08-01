@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed — drive-engine: return arrivals go home and current repairs outrun cleanup
+
+A final SFO→BNA flight produced a 33-hour `Drive: BNA → San Francisco, CA` block. The trip's date-only wrapper and last lodging were still active at the post-arrival anchor, so the generic trip-position resolver sent the arrival drive back to the destination city. The engine now recognizes a flight chain that started from home and closes at the same airport, routing only that closing arrival home. Same-airport side trips that begin while already away still return to their trip lodging.
+
+The far-future cleanup introduced in 0.2.76 exposed several thousand duplicate and orphan deletes. The 20-second write budget applied every delete before any update or create, leaving current corrections behind hours of cleanup. Apply now processes updates, creates, and conversions before orphan deletion. Scheduled runs retain their bounded write phase; an operator repair can set `DRIVE_ENGINE_UNBOUNDED_APPLY=1` to drain the complete reconcile plan in one run.
+
 ## 0.2.77 — 2026-07-31
 
 ### Fixed — nightly-travel-sync: cadence cap no longer near-misses and skips (jbaruch/nanoclaw#803)

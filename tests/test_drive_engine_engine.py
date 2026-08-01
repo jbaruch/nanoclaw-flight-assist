@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "skills" / "travel-core"))
 sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
-from block_codec import GEN_LEGACY_FADRIVE, ParsedBlock  # noqa: E402
+from block_codec import GEN_LEGACY_FADRIVE, GEN_UNIFIED, ParsedBlock  # noqa: E402
 from engine import AirportInfo, build_reconcile_plan  # noqa: E402
 from flight_identity import BYAIR, Flight  # noqa: E402
 
@@ -123,6 +123,132 @@ def test_connection_chain_yields_only_ground_endpoints():
     # exactly the opening departure (to STN) and the closing arrival (from BNA)
     assert created == {("airport_departure", "STN airport"), ("airport_arrival", HOME)}
     assert len(result.plan.creates) == 2
+
+
+def test_round_trip_closing_arrival_returns_home_on_trip_end_day():
+    """Regression for the live BNA→San Francisco block on the return landing.
+
+    The Trip wrapper and last lodging remain active through the return date. The
+    chain still began from home and closes at its opening airport, so its final
+    airport-arrival drive must end at home, not at the trip destination.
+    """
+    chain = [
+        flight("BNA", "SFO", _dt(9, day=12), _dt(14, day=12), fid=1, trip_id=7),
+        flight("SFO", "BNA", _dt(18, day=14), _dt(22, day=14), fid=2, trip_id=7),
+    ]
+    schedule = [
+        {
+            "type": "Trip",
+            "summary": "San Francisco",
+            "start": "2020-07-12",
+            "end": "2020-07-14",
+            "location": "San Francisco, CA",
+        },
+        {
+            "type": "Flight",
+            "summary": "BNA to SFO",
+            "start": "2020-07-12T09:00:00Z",
+            "end": "2020-07-12T14:00:00Z",
+        },
+        {
+            "type": "Lodging",
+            "summary": "San Francisco hotel",
+            "start": "2020-07-12T16:00:00Z",
+            "end": "2020-07-14T15:00:00Z",
+            "location": "1 Market St, San Francisco, CA",
+        },
+        {
+            "type": "Flight",
+            "summary": "SFO to BNA",
+            "start": "2020-07-14T18:00:00Z",
+            "end": "2020-07-14T22:00:00Z",
+        },
+    ]
+    result = build_reconcile_plan(
+        flights=chain,
+        airport_info=_us_info("BNA", "SFO"),
+        current_blocks=[],
+        route=const_route(30),
+        schedule=schedule,
+        home_address=HOME,
+        now=NOW,
+    )
+
+    arrivals = [
+        create.desired for create in result.plan.creates if create.desired.kind == "airport_arrival"
+    ]
+    assert [arrival.destination for arrival in arrivals] == [
+        "San Francisco, CA",
+        HOME,
+    ]
+    assert arrivals[-1].summary == "Drive: BNA → home"
+
+    stale = ParsedBlock(
+        generation=GEN_UNIFIED,
+        event_id="bad-return",
+        identity=arrivals[-1].identity,
+        kind=arrivals[-1].kind,
+        baseline_seconds=120_000,
+        anchor=arrivals[-1].anchor,
+        origin="BNA airport",
+        destination="San Francisco, CA",
+    )
+    repair = build_reconcile_plan(
+        flights=chain,
+        airport_info=_us_info("BNA", "SFO"),
+        current_blocks=[stale],
+        route=const_route(30),
+        schedule=schedule,
+        home_address=HOME,
+        now=NOW,
+    )
+    assert len(repair.plan.updates) == 1
+    assert repair.plan.updates[0].event_id == "bad-return"
+    assert repair.plan.updates[0].desired.destination == HOME
+
+
+def test_in_trip_same_airport_loop_returns_to_lodging_not_static_home():
+    """A loop that starts while already away closes at the trip lodging."""
+    chain = [
+        flight("OSL", "BGO", _dt(9, day=13), _dt(10, day=13), fid=1, trip_id=8),
+        flight("BGO", "OSL", _dt(18, day=13), _dt(19, day=13), fid=2, trip_id=8),
+    ]
+    schedule = [
+        {
+            "type": "Trip",
+            "summary": "Oslo",
+            "start": "2020-07-11",
+            "end": "2020-07-15",
+            "location": "Oslo, Norway",
+        },
+        {
+            "type": "Flight",
+            "summary": "BNA to OSL",
+            "start": "2020-07-11T09:00:00Z",
+            "end": "2020-07-11T18:00:00Z",
+        },
+        {
+            "type": "Lodging",
+            "summary": "Oslo hotel",
+            "start": "2020-07-11T20:00:00Z",
+            "end": "2020-07-15T10:00:00Z",
+            "location": "Oslo hotel address",
+        },
+    ]
+    result = build_reconcile_plan(
+        flights=chain,
+        airport_info=_us_info("OSL", "BGO"),
+        current_blocks=[],
+        route=const_route(30),
+        schedule=schedule,
+        home_address=HOME,
+        now=NOW,
+    )
+
+    closing = [
+        create.desired for create in result.plan.creates if create.desired.kind == "airport_arrival"
+    ][-1]
+    assert closing.destination == "Oslo hotel address"
 
 
 def test_past_flight_builds_no_legs_and_is_skipped():

@@ -256,8 +256,8 @@ def apply_plan(
 ) -> ApplyResult:
     """Execute a reconcile plan against the calendar. Returns applied counts.
 
-    Order: deletes (cleanup — drains any duplicate/orphan backlog), then creates,
-    converts, updates.
+    Order: updates, creates, converts, then deletes. Desired-state corrections
+    take the bounded write budget before duplicate/orphan cleanup.
 
     Updates are an in-place PATCH of the same event, so an update can never leave
     a duplicate even if the sweep is killed the instant after — the recreate-then-
@@ -268,9 +268,9 @@ def apply_plan(
     clean payload instead of being killed mid-write past the host precheck timeout
     (#164). Each write UNIT is atomic — the budget is checked BEFORE starting one,
     never mid-unit — so bounding never splits a create/patch/convert. Ops not
-    started this sweep are counted in `deferred` and drained on the next sweep;
-    because the reconcile is idempotent (matches existing blocks), resuming never
-    duplicates. `monotonic` is injected for deterministic tests.
+    started this sweep are counted in `deferred` and drained on the next sweep.
+    The reconcile is idempotent, so resuming never duplicates. `monotonic` is
+    injected for deterministic tests.
     """
     result = ApplyResult()
     deadline = monotonic() + budget_seconds if budget_seconds is not None else None
@@ -278,12 +278,39 @@ def apply_plan(
     def over_budget() -> bool:
         return deadline is not None and monotonic() >= deadline
 
-    for d in plan.deletes:
+    for u in plan.updates:
         if over_budget():
             result.deferred += 1
             continue
-        if _delete(calendar, calendar_id=calendar_id, event_id=d.event_id, result=result):
-            result.deleted += 1
+        if u.event_id is None:
+            # A matched block with no parseable event id can't be patched; the
+            # reconcile only pairs an Update to a real fetched block, so this is
+            # a defensive guard, logged and left for the next sweep.
+            result.errors.append(f"update {u.desired.identity}: no event_id to patch")
+            continue
+        try:
+            calendar.patch_event(
+                build_patch_args(u.desired, event_id=u.event_id, calendar_id=calendar_id)
+            )
+        except _WRITE_ERRORS as exc:
+            result.errors.append(f"update-patch {u.desired.identity}: {exc}")
+            continue
+        result.updated += 1
+        # Alert only on a MATERIAL drive-time change (traffic swing worth acting
+        # on); routine sub-threshold re-times patch silently.
+        delta = material_update_delta(u.prior_baseline_seconds, u.desired.baseline_seconds)
+        if delta is not None:
+            minutes, direction = delta
+            result.material_updates.append(
+                {
+                    "identity": u.desired.identity,
+                    "meeting": _meeting_name(u.desired.summary),
+                    "minutes": minutes,
+                    "direction": direction,
+                    "when": _local_when(u.desired),
+                    "anchor": u.desired.anchor.isoformat(),
+                }
+            )
 
     for c in plan.creates:
         if over_budget():
@@ -330,38 +357,11 @@ def apply_plan(
             new_id = _created_id(created)
             _delete(calendar, calendar_id=calendar_id, event_id=new_id, result=result)
 
-    for u in plan.updates:
+    for d in plan.deletes:
         if over_budget():
             result.deferred += 1
             continue
-        if u.event_id is None:
-            # A matched block with no parseable event id can't be patched; the
-            # reconcile only pairs an Update to a real fetched block, so this is
-            # a defensive guard, logged and left for the next sweep.
-            result.errors.append(f"update {u.desired.identity}: no event_id to patch")
-            continue
-        try:
-            calendar.patch_event(
-                build_patch_args(u.desired, event_id=u.event_id, calendar_id=calendar_id)
-            )
-        except _WRITE_ERRORS as exc:
-            result.errors.append(f"update-patch {u.desired.identity}: {exc}")
-            continue
-        result.updated += 1
-        # Alert only on a MATERIAL drive-time change (traffic swing worth acting
-        # on); routine sub-threshold re-times patch silently.
-        delta = material_update_delta(u.prior_baseline_seconds, u.desired.baseline_seconds)
-        if delta is not None:
-            minutes, direction = delta
-            result.material_updates.append(
-                {
-                    "identity": u.desired.identity,
-                    "meeting": _meeting_name(u.desired.summary),
-                    "minutes": minutes,
-                    "direction": direction,
-                    "when": _local_when(u.desired),
-                    "anchor": u.desired.anchor.isoformat(),
-                }
-            )
+        if _delete(calendar, calendar_id=calendar_id, event_id=d.event_id, result=result):
+            result.deleted += 1
 
     return result

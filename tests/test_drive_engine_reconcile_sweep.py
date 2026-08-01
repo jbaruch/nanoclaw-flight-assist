@@ -725,3 +725,12 @@ def test_live_branch_passes_fixed_apply_budget(monkeypatch):
     spy = _ApplySpy()
     reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), apply=spy)
     assert spy.calls[0][1]["budget_seconds"] == reconcile_sweep._APPLY_PHASE_BUDGET_SECONDS
+
+
+def test_live_branch_can_apply_without_a_write_budget(monkeypatch):
+    """An operator can opt one repair sweep into draining the complete plan."""
+    monkeypatch.delenv("DRIVE_ENGINE_SHADOW", raising=False)
+    monkeypatch.setenv("DRIVE_ENGINE_UNBOUNDED_APPLY", "1")
+    spy = _ApplySpy()
+    reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), apply=spy)
+    assert spy.calls[0][1]["budget_seconds"] is None
