@@ -32,8 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from block_codec import leg_identity
-from chain import LegKind, plan_chain_legs
-from chain_builder import build_pair_contexts, group_into_chains
+from chain import LegKind, PlannedLeg, plan_chain_legs
+from chain_builder import build_pair_contexts, group_into_chains, group_into_itineraries
 from flight_identity import Flight, MergedFlight, merge_flights
 from leg_anchor import AirportFacts, BufferOverrides, ConcreteLeg, resolve_leg_anchor
 from position import position_at, resolve_leg_origin
@@ -284,14 +284,35 @@ def build_reconcile_plan(
     merged = merge_flights(flights)
     chains = group_into_chains(merged)
 
+    # Trip aliases answer one itinerary-level question only: which final arrival
+    # closes a round trip that opened from home? They must NOT redefine the
+    # operational chains passed to `plan_chain_legs`: TripIt commonly keeps an
+    # outbound and return under one alias across a multi-day stay, while byAir's
+    # preferred ids split them at the ground stay. Joining those chains would
+    # suppress the valid arrival/departure drives around the stay.
+    homecoming_flights: set[MergedFlight] = set()
+    for itinerary in group_into_itineraries(merged):
+        first = itinerary[0]
+        last = itinerary[-1]
+        if first.dep_airport != last.arr_airport:
+            continue
+        opening_leg = resolve_leg_anchor(
+            PlannedLeg(LegKind.AIRPORT_DEPARTURE, to_flight=first),
+            facts=_facts_for(first, airport_info),
+            overrides=overrides,
+        )
+        opening_anchor = opening_leg.anchor
+        assert opening_anchor is not None
+        opening = position_at(schedule, opening_anchor, home_address=home_address)
+        if opening.source == "home" and opening.address is not None:
+            homecoming_flights.add(last)
+
     desired: list[DesiredBlock] = []
     skipped: list[str] = []
 
     for chain in chains:
         contexts = build_pair_contexts(chain, schedule=schedule, left_terminal=left_terminal)
         planned_legs = plan_chain_legs(chain, contexts)
-        closes_at_opening_airport = chain[0].dep_airport == chain[-1].arr_airport
-        opening_from_home = False
         for planned in planned_legs:
             # plan_chain_legs guarantees the right endpoint per kind, but narrow it
             # explicitly here so _facts_for receives a non-None flight (no ignore).
@@ -318,11 +339,6 @@ def build_reconcile_plan(
                 concrete = resolve_leg_anchor(
                     planned, facts=_facts_for(flight, airport_info), overrides=overrides
                 )
-                if flight is chain[0]:
-                    opening_anchor = concrete.anchor
-                    assert opening_anchor is not None
-                    opening = position_at(schedule, opening_anchor, home_address=home_address)
-                    opening_from_home = opening.source == "home" and opening.address is not None
                 if _leg_past(planned.kind, concrete, now):
                     skipped.append(f"departure {leg_identity(concrete)}: past, skipped")
                     continue
@@ -350,9 +366,7 @@ def build_reconcile_plan(
                     concrete,
                     schedule=schedule,
                     home_address=home_address,
-                    return_home=(
-                        flight is chain[-1] and closes_at_opening_airport and opening_from_home
-                    ),
+                    return_home=flight in homecoming_flights,
                     route=route,
                     boarding_present=boarding_present,
                 )

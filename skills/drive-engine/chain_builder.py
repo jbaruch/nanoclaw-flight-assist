@@ -29,14 +29,35 @@ def _parse_iso(raw: object) -> datetime | None:
 
 
 def group_into_chains(flights: list[MergedFlight]) -> list[list[MergedFlight]]:
-    """Group merged flights into ordered chains, one per connected trip.
+    """Group merged flights into operational chains by preferred `trip_id`.
 
-    Flights sharing ANY source-side trip alias form a chain, transitively, ordered
-    by scheduled departure. This matters when byAir splits an itinerary into an
-    outbound id and a return id while the two fused TripIt twins carry one shared
-    TripIt alias: the shared alias reconnects the full round trip. A flight with
-    no trip alias forms its own singleton chain. Chains are returned ordered by
-    their first flight's scheduled departure, so the output is deterministic.
+    The preferred id preserves byAir's intentional split between outbound and
+    return journeys around a long stay. Feeding a shared TripIt itinerary alias
+    into connection classification would misread the stay as an airside layover
+    when no lodging record exists. A flight with no preferred id forms its own
+    singleton chain. Chains are ordered by their first scheduled departure.
+    """
+    by_trip: dict[int, list[MergedFlight]] = {}
+    singletons: list[list[MergedFlight]] = []
+    for flight in flights:
+        if flight.trip_id is None:
+            singletons.append([flight])
+        else:
+            by_trip.setdefault(flight.trip_id, []).append(flight)
+
+    chains = [sorted(group, key=lambda flight: flight.scheduled_dep) for group in by_trip.values()]
+    chains.extend(singletons)
+    chains.sort(key=lambda chain: chain[0].scheduled_dep)
+    return chains
+
+
+def group_into_itineraries(flights: list[MergedFlight]) -> list[list[MergedFlight]]:
+    """Group by connected source aliases for itinerary-level facts only.
+
+    A shared TripIt alias can reconnect outbound and return chains that byAir gave
+    different preferred ids. Consumers use these components to recognize the
+    overall opening and closing airports; connection-leg planning continues to
+    use `group_into_chains` so a multi-day stay keeps its ground endpoints.
     """
     parent = list(range(len(flights)))
 
@@ -64,11 +85,11 @@ def group_into_chains(flights: list[MergedFlight]) -> list[list[MergedFlight]]:
     for index, flight in enumerate(flights):
         by_component.setdefault(find(index), []).append(flight)
 
-    chains = [
+    itineraries = [
         sorted(group, key=lambda flight: flight.scheduled_dep) for group in by_component.values()
     ]
-    chains.sort(key=lambda chain: chain[0].scheduled_dep)
-    return chains
+    itineraries.sort(key=lambda itinerary: itinerary[0].scheduled_dep)
+    return itineraries
 
 
 def _spans_overnight(start: datetime, end: datetime) -> bool:

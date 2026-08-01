@@ -239,6 +239,72 @@ def test_round_trip_closing_arrival_returns_home_on_trip_end_day():
     assert repair.plan.updates[0].desired.destination == HOME
 
 
+def test_shared_alias_preserves_long_stay_ground_legs_without_lodging():
+    """Live Oslo follow-up: a shared TripIt itinerary identifies homecoming,
+    but must not turn the multi-day stay into an airside connection."""
+    flights = [
+        flight("BNA", "OSL", _dt(9, day=12), _dt(14, day=12), fid=1, trip_id=101),
+        tripit_flight(
+            "BNA",
+            "OSL",
+            _dt(9, day=12),
+            _dt(14, day=12),
+            segment_id="outbound",
+            trip_id=-900,
+        ),
+        flight("OSL", "BNA", _dt(18, day=14), _dt(22, day=14), fid=2, trip_id=202),
+        tripit_flight(
+            "OSL",
+            "BNA",
+            _dt(18, day=14),
+            _dt(22, day=14),
+            segment_id="return",
+            trip_id=-900,
+        ),
+    ]
+    schedule = [
+        {
+            "type": "Trip",
+            "summary": "Oslo",
+            "start": "2020-07-12",
+            "end": "2020-07-14",
+            "location": "Oslo, Norway",
+        },
+        {
+            "type": "Flight",
+            "summary": "BNA to OSL",
+            "start": "2020-07-12T09:00:00Z",
+            "end": "2020-07-12T14:00:00Z",
+        },
+        {
+            "type": "Flight",
+            "summary": "OSL to BNA",
+            "start": "2020-07-14T18:00:00Z",
+            "end": "2020-07-14T22:00:00Z",
+        },
+    ]
+
+    result = build_reconcile_plan(
+        flights=flights,
+        airport_info=_us_info("BNA", "OSL"),
+        current_blocks=[],
+        route=const_route(30),
+        schedule=schedule,
+        home_address=HOME,
+        now=NOW,
+    )
+
+    created = [create.desired for create in result.plan.creates]
+    arrivals = [block for block in created if block.kind == "airport_arrival"]
+    departures = [block for block in created if block.kind == "airport_departure"]
+    assert [(block.summary, block.destination) for block in arrivals] == [
+        ("Drive: OSL → Oslo, Norway", "Oslo, Norway"),
+        ("Drive: BNA → home", HOME),
+    ]
+    assert {block.destination for block in departures} == {"BNA airport", "OSL airport"}
+    assert all(block.kind != "airport_transfer" for block in created)
+
+
 def test_in_trip_same_airport_loop_returns_to_lodging_not_static_home():
     """A loop that starts while already away closes at the trip lodging."""
     chain = [

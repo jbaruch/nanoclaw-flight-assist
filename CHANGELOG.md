@@ -1,5 +1,19 @@
 # Changelog
 
+### Fixed — drive-engine: scope shared trip aliases to homecoming detection
+
+Version 0.2.79 used the shared TripIt alias to place split byAir journeys in one
+connection chain. That repaired the final BNA homecoming, but a TripIt itinerary
+also spans the multi-day stay between outbound and return. With no lodging record,
+connection classification treated that stay as an airside layover and removed the
+valid `Drive: OSL → Oslo, Norway` arrival block.
+
+Primary byAir trip IDs again define operational connection chains and preserve the
+ground endpoints around a stay. The connected source aliases now answer only the
+itinerary-level homecoming question: whether the last arrival closes at the first
+departure airport after opening from home. Regression coverage pins both outcomes
+together—`BNA → home` is repaired while `OSL → Oslo, Norway` remains present.
+
 ## 0.2.79 — 2026-08-01
 
 ### Fixed — drive-engine: reconnect round trips split by byAir trip IDs
