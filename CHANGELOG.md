@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.79 — 2026-08-01
+
 ### Fixed — drive-engine: reconnect round trips split by byAir trip IDs
 
 byAir can assign the outbound and return halves of one TripIt itinerary different
