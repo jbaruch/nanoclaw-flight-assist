@@ -1,5 +1,21 @@
 # Changelog
 
+### Fixed — drive-engine: reconnect round trips split by byAir trip IDs
+
+byAir can assign the outbound and return halves of one TripIt itinerary different
+trip IDs. When each flight existed in both sources, the merge kept only byAir's
+preferred ID and discarded TripIt's shared itinerary alias. The return flight then
+became a singleton chain, so a BNA landing still resolved its destination to the
+active San Francisco trip location and recreated the 33-hour
+`Drive: BNA → San Francisco, CA` block.
+
+Merged flights now retain every source-side trip alias while preserving the
+existing preferred `trip_id` compatibility field. Chain assembly groups flights
+by connected aliases, so the shared TripIt itinerary rejoins split byAir halves
+transitively and the closing BNA arrival is recognized as the homecoming leg. The
+regression fixture uses the exact live shape: distinct byAir IDs for outbound and
+return plus one shared TripIt ID.
+
 ## 0.2.78 — 2026-08-01
 
 ### Fixed — drive-engine: return arrivals go home and current repairs outrun cleanup

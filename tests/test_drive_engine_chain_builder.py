@@ -30,7 +30,7 @@ def _dt(h, mi=0, *, day=12):
     return datetime(2020, 7, day, h, mi, tzinfo=UTC)
 
 
-def flight(dep, arr, sched_dep, sched_arr, *, fid=1, trip_id=None):
+def flight(dep, arr, sched_dep, sched_arr, *, fid=1, trip_id=None, trip_ids=frozenset()):
     return MergedFlight(
         dep_airport=dep,
         arr_airport=arr,
@@ -41,6 +41,7 @@ def flight(dep, arr, sched_dep, sched_arr, *, fid=1, trip_id=None):
         code=None,
         byair_flight_ids=frozenset({fid}),
         trip_id=trip_id,
+        trip_ids=trip_ids,
     )
 
 
@@ -69,6 +70,34 @@ def test_distinct_trips_are_separate_chains():
     chains = group_into_chains([b, a])
     assert len(chains) == 2
     assert chains[0][0].trip_id == 1  # earlier-departing trip first
+
+
+def test_shared_secondary_alias_rejoins_split_byair_round_trip():
+    """Live SFO regression: byAir split outbound/return into different trips,
+    but each fused TripIt twin retained the same itinerary alias."""
+    outbound = flight(
+        "BNA",
+        "SFO",
+        _dt(9),
+        _dt(14),
+        fid=1,
+        trip_id=2832675,
+        trip_ids=frozenset({2832675, -384031073}),
+    )
+    returning = flight(
+        "SFO",
+        "BNA",
+        _dt(18, day=14),
+        _dt(22, day=14),
+        fid=2,
+        trip_id=2832677,
+        trip_ids=frozenset({2832677, -384031073}),
+    )
+
+    chains = group_into_chains([returning, outbound])
+
+    assert len(chains) == 1
+    assert [f.dep_airport for f in chains[0]] == ["BNA", "SFO"]
 
 
 # --- lodging-between --------------------------------------------------------
