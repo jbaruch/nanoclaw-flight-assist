@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 from chain_builder import (  # noqa: E402
     build_pair_contexts,
     group_into_chains,
+    group_into_itineraries,
     has_lodging_between,
 )
 from flight_identity import MergedFlight  # noqa: E402
@@ -72,7 +73,7 @@ def test_distinct_trips_are_separate_chains():
     assert chains[0][0].trip_id == 1  # earlier-departing trip first
 
 
-def test_shared_secondary_alias_rejoins_split_byair_round_trip():
+def test_shared_secondary_alias_rejoins_itinerary_but_preserves_split_chains():
     """Live SFO regression: byAir split outbound/return into different trips,
     but each fused TripIt twin retained the same itinerary alias."""
     outbound = flight(
@@ -94,10 +95,13 @@ def test_shared_secondary_alias_rejoins_split_byair_round_trip():
         trip_ids=frozenset({2832677, -384031073}),
     )
 
-    chains = group_into_chains([returning, outbound])
+    flights = [returning, outbound]
+    chains = group_into_chains(flights)
+    itineraries = group_into_itineraries(flights)
 
-    assert len(chains) == 1
-    assert [f.dep_airport for f in chains[0]] == ["BNA", "SFO"]
+    assert [len(chain) for chain in chains] == [1, 1]
+    assert len(itineraries) == 1
+    assert [f.dep_airport for f in itineraries[0]] == ["BNA", "SFO"]
 
 
 # --- lodging-between --------------------------------------------------------
