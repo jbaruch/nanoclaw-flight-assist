@@ -1,7 +1,5 @@
 # Changelog
 
-## 0.2.78 — 2026-07-31
-
 ### Fixed — drive-engine: return arrivals go home and current repairs outrun cleanup
 
 A final SFO→BNA flight produced a 33-hour `Drive: BNA → San Francisco, CA` block. The trip's date-only wrapper and last lodging were still active at the post-arrival anchor, so the generic trip-position resolver sent the arrival drive back to the destination city. The engine now recognizes a flight chain that started from home and closes at the same airport, routing only that closing arrival home. Same-airport side trips that begin while already away still return to their trip lodging.
