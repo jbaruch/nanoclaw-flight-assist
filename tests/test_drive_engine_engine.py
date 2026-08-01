@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
 from block_codec import GEN_LEGACY_FADRIVE, GEN_UNIFIED, ParsedBlock  # noqa: E402
 from engine import AirportInfo, build_reconcile_plan  # noqa: E402
-from flight_identity import BYAIR, Flight  # noqa: E402
+from flight_identity import BYAIR, TRIPIT, Flight  # noqa: E402
 
 UTC = timezone.utc
 HOME = "12 Example St, TN"
@@ -43,6 +43,19 @@ def flight(dep, arr, sdep, sarr, *, fid, trip_id=None, code=None):
         code=code,
         source=BYAIR,
         byair_flight_id=fid,
+        trip_id=trip_id,
+    )
+
+
+def tripit_flight(dep, arr, sdep, sarr, *, segment_id, trip_id, code=None):
+    return Flight(
+        dep_airport=dep,
+        arr_airport=arr,
+        scheduled_dep=sdep,
+        scheduled_arr=sarr,
+        code=code,
+        source=TRIPIT,
+        tripit_segment_id=segment_id,
         trip_id=trip_id,
     )
 
@@ -132,9 +145,28 @@ def test_round_trip_closing_arrival_returns_home_on_trip_end_day():
     chain still began from home and closes at its opening airport, so its final
     airport-arrival drive must end at home, not at the trip destination.
     """
+    # Exact live grouping shape: byAir split the outbound and return into two
+    # trip ids, while TripIt linked both physical-flight twins under one shared
+    # itinerary id. The merged aliases must reconnect the round trip.
     chain = [
-        flight("BNA", "SFO", _dt(9, day=12), _dt(14, day=12), fid=1, trip_id=7),
-        flight("SFO", "BNA", _dt(18, day=14), _dt(22, day=14), fid=2, trip_id=7),
+        flight("BNA", "SFO", _dt(9, day=12), _dt(14, day=12), fid=1, trip_id=2832675),
+        tripit_flight(
+            "BNA",
+            "SFO",
+            _dt(9, day=12),
+            _dt(14, day=12),
+            segment_id="outbound",
+            trip_id=-384031073,
+        ),
+        flight("SFO", "BNA", _dt(18, day=14), _dt(22, day=14), fid=2, trip_id=2832677),
+        tripit_flight(
+            "SFO",
+            "BNA",
+            _dt(18, day=14),
+            _dt(22, day=14),
+            segment_id="return",
+            trip_id=-384031073,
+        ),
     ]
     schedule = [
         {

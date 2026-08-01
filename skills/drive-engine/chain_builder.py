@@ -29,25 +29,44 @@ def _parse_iso(raw: object) -> datetime | None:
 
 
 def group_into_chains(flights: list[MergedFlight]) -> list[list[MergedFlight]]:
-    """Group merged flights into ordered chains, one per trip.
+    """Group merged flights into ordered chains, one per connected trip.
 
-    Flights sharing a `trip_id` form a chain, ordered by scheduled departure. A
-    flight with no `trip_id` (e.g. a TripIt-only or byAir-only straggler) forms its
-    own singleton chain. Chains are returned ordered by their first flight's
-    scheduled departure, so the output is deterministic.
+    Flights sharing ANY source-side trip alias form a chain, transitively, ordered
+    by scheduled departure. This matters when byAir splits an itinerary into an
+    outbound id and a return id while the two fused TripIt twins carry one shared
+    TripIt alias: the shared alias reconnects the full round trip. A flight with
+    no trip alias forms its own singleton chain. Chains are returned ordered by
+    their first flight's scheduled departure, so the output is deterministic.
     """
-    by_trip: dict[int, list[MergedFlight]] = {}
-    singletons: list[list[MergedFlight]] = []
-    for f in flights:
-        if f.trip_id is None:
-            singletons.append([f])
-        else:
-            by_trip.setdefault(f.trip_id, []).append(f)
+    parent = list(range(len(flights)))
 
-    chains: list[list[MergedFlight]] = [
-        sorted(group, key=lambda f: f.scheduled_dep) for group in by_trip.values()
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            # Index order is deterministic and keeps the component root stable.
+            low, high = sorted((left_root, right_root))
+            parent[high] = low
+
+    owner_by_alias: dict[int, int] = {}
+    for index, flight in enumerate(flights):
+        for alias in sorted(flight.all_trip_ids):
+            owner = owner_by_alias.setdefault(alias, index)
+            union(index, owner)
+
+    by_component: dict[int, list[MergedFlight]] = {}
+    for index, flight in enumerate(flights):
+        by_component.setdefault(find(index), []).append(flight)
+
+    chains = [
+        sorted(group, key=lambda flight: flight.scheduled_dep) for group in by_component.values()
     ]
-    chains.extend(singletons)
     chains.sort(key=lambda chain: chain[0].scheduled_dep)
     return chains
 
