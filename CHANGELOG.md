@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.80 — 2026-08-01
+
 ### Fixed — drive-engine: scope shared trip aliases to homecoming detection
 
 Version 0.2.79 used the shared TripIt alias to place split byAir journeys in one
