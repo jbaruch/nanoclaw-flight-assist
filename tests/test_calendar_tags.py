@@ -1,10 +1,10 @@
-"""Tests for the flight-assist managed-event tag codec (`calendar_tags.py`).
+"""Tests for the flight-assist managed-event tag reader (`calendar_tags.py`).
 
-The tags ride in the event description's `<!--fa:{...}-->` comment (the live v3
-toolkit this plugin shipped on had no writable extendedProperties). These tests pin the round
-trip the reconcile depends on: encode tags onto a (possibly pre-existing)
-description, decode them back, and strip the comment so a byAir event's own
-content survives an adopt without the tag accumulating on re-reads.
+The tags live in `extendedProperties.private`; `decode_private_props` reads them
+from there as a complete set. `strip_tags` survives to scrub any stray legacy
+`<!--fa:-->` comment out of a human description on write. These tests pin the
+single-source read the reconcile depends on and the description-sanitize the
+writer depends on.
 
 Synthetic fixtures only.
 """
@@ -20,12 +20,14 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "flight-assist"))
 from calendar_tags import (  # noqa: E402
     TAG_KEYS,
     decode_private_props,
-    decode_tags,
-    encode_tags,
     strip_tags,
 )
 
 TAGS = {"faFlightId": "100", "faKind": "boarding", "faManaged": "created"}
+
+# A raw human description carrying a leftover legacy tag comment — the shape a
+# pre-flip event still on disk would present. The reader must IGNORE it now.
+_LEGACY_DESC = 'Gate B12\n<!--fa:{"faFlightId":"100","faKind":"boarding","faManaged":"created"}-->'
 
 
 def _ext_event(private: dict, *, description: str | None = None) -> dict:
@@ -36,81 +38,43 @@ def _ext_event(private: dict, *, description: str | None = None) -> dict:
     return event
 
 
-def test_encode_then_decode_round_trips():
-    desc = encode_tags("", TAGS)
-    assert decode_tags(desc) == TAGS
+# --- strip_tags: still used by the writer to sanitize human descriptions -----
 
 
-def test_encode_preserves_existing_description():
-    desc = encode_tags("Gate B12", TAGS)
-    assert desc.startswith("Gate B12")
-    assert decode_tags(desc) == TAGS
-    assert strip_tags(desc) == "Gate B12"
-
-
-def test_encode_is_idempotent_does_not_accumulate():
-    once = encode_tags("Gate B12", TAGS)
-    twice = encode_tags(once, {"faFlightId": "200"})
-    # Re-encoding strips the prior comment first — exactly one tag comment.
-    assert twice.count("<!--fa:") == 1
-    assert decode_tags(twice) == {"faFlightId": "200"}
-    assert strip_tags(twice) == "Gate B12"
-
-
-def test_empty_props_yields_clean_description_no_comment():
-    assert encode_tags("Gate B12", {}) == "Gate B12"
-    assert encode_tags("", {}) == ""
-
-
-def test_decode_untagged_is_empty():
-    assert decode_tags("just a normal description") == {}
-    assert decode_tags("") == {}
-
-
-def test_decode_malformed_json_is_empty():
-    assert decode_tags("<!--fa:{not valid json}-->") == {}
-
-
-def test_decode_non_string_is_empty():
-    assert decode_tags(None) == {}
-    assert decode_tags(42) == {}
+def test_strip_tags_removes_legacy_comment():
+    assert strip_tags(_LEGACY_DESC) == "Gate B12"
 
 
 def test_strip_non_string_is_empty_string():
     assert strip_tags(None) == ""
 
 
-# --- dual-source reader: extendedProperties (the #178 migration) ------------
+# --- decode_private_props: single-source extendedProperties reader (#178/#200) -
 
 
 def test_decode_private_props_reads_extended_properties():
     assert decode_private_props(_ext_event(dict(TAGS))) == TAGS
 
 
-def test_decode_private_props_prefers_extended_over_description():
-    # An event carrying BOTH reads its tags from extendedProperties.
+def test_decode_private_props_ignores_legacy_description_comment():
+    # A complete ext tag set wins; a leftover `<!--fa:-->` comment carrying
+    # DIFFERENT tags in the description is never read (the fallback is gone, #200).
     ext = {"faFlightId": "999", "faKind": "flight", "faManaged": "adopted"}
-    event = _ext_event(ext, description=encode_tags("Gate B12", TAGS))
+    event = _ext_event(ext, description=_LEGACY_DESC)
     assert decode_private_props(event) == ext
 
 
-def test_decode_private_props_falls_back_to_description():
-    # No extendedProperties → read the description comment.
-    event = {"id": "e1", "description": encode_tags("Gate B12", TAGS)}
-    assert decode_private_props(event) == TAGS
-
-
-def test_decode_private_props_partial_extended_falls_back_to_description():
-    # A partial new-shape map (faManaged present but faFlightId missing) must NOT
-    # shadow a valid legacy description tag — the description is the safe fallback
-    # for incomplete new-shape data (coding-policy: stateful-artifacts).
+def test_decode_private_props_partial_extended_ignores_description():
+    # A partial new-shape map (faManaged present but faFlightId missing) is "not
+    # managed" — even with a leftover legacy description comment, there is no
+    # fallback anymore (#200), so the result is `{}`.
     ext = {"faKind": "boarding", "faManaged": "created"}  # no faFlightId
-    event = _ext_event(ext, description=encode_tags("Gate B12", TAGS))
-    assert decode_private_props(event) == TAGS
+    event = _ext_event(ext, description=_LEGACY_DESC)
+    assert decode_private_props(event) == {}
 
 
-def test_decode_private_props_incomplete_extended_with_no_description_is_empty():
-    # Incomplete ext AND no usable description → "not managed", never a partial map.
+def test_decode_private_props_incomplete_extended_is_empty():
+    # Incomplete ext → "not managed", never a partial map.
     ext = {"faManaged": "created"}  # only the marker, nothing else
     assert decode_private_props(_ext_event(ext)) == {}
 

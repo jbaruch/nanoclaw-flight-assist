@@ -1,5 +1,14 @@
 # Changelog
 
+### Fixed — flight-assist: drop the dormant `<!--fa:-->` description-tag reader fallback (#200)
+
+`decode_private_props` no longer falls back to the `<!--fa:{...}-->` description
+comment — it reads managed tags only from `extendedProperties.private`, the sole
+live source since the #178 migration. The now-unused `encode_tags`/`decode_tags`
+codec is gone; `strip_tags` survives to scrub any stray legacy comment out of a
+human description on write. Verified zero live boarding/flight events still carry
+the description tag.
+
 ## 0.2.80 — 2026-08-01
 
 ### Fixed — drive-engine: scope shared trip aliases to homecoming detection

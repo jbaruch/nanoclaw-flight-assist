@@ -125,26 +125,11 @@ def test_normalize_flight_event_shape():
     }
 
 
-def test_normalize_extracts_private_props_from_description_tag():
-    # Tags ride in the description's <!--fa:{...}--> comment (the live v3
-    # toolkit has no writable extendedProperties); normalize decodes them and
-    # exposes the human description with the comment stripped.
-    raw = {
-        "id": "boarding-1",
-        "summary": "Boarding UA8018",
-        "description": 'Gate B12\n<!--fa:{"faFlightId":"100","faKind":"boarding"}-->',
-        **_timed("2026-06-26T09:35:00-05:00", "2026-06-26T10:05:00-05:00"),
-    }
-    norm = normalize_event(raw, calendar_id=FLIGHTY_CAL)
-    assert norm["private_props"] == {"faFlightId": "100", "faKind": "boarding"}
-    assert norm["description"] == "Gate B12"
-
-
 def test_normalize_extracts_private_props_from_extended_properties():
-    # #193 dual-read: a post-flip event carries a COMPLETE managed-tag set in
-    # extendedProperties.private and only the human line in the description.
-    # normalize_event must surface those tags to the planner (the reconciliation-
-    # facing outcome) — not just the direct codec.
+    # Tags live in extendedProperties.private as a COMPLETE managed-tag set, with
+    # only the human line in the description. normalize_event must surface those
+    # tags to the planner (the reconciliation-facing outcome) — not just the
+    # direct codec.
     tags = {"faFlightId": "100", "faKind": "boarding", "faManaged": "created"}
     raw = {
         "id": "boarding-1",
@@ -158,8 +143,10 @@ def test_normalize_extracts_private_props_from_extended_properties():
     assert norm["description"] == "Gate B12"
 
 
-def test_normalize_prefers_extended_over_description_tags():
-    # An event carrying BOTH reads its tags from extendedProperties.
+def test_normalize_ignores_legacy_description_comment():
+    # Tags come only from extendedProperties (#200 dropped the description-tag
+    # reader). A leftover legacy <!--fa:--> comment carrying DIFFERENT tags is
+    # never read, and strip_tags scrubs it out of the human description.
     ext = {"faFlightId": "999", "faKind": "flight", "faManaged": "adopted"}
     raw = {
         "id": "flight-1",
@@ -170,19 +157,7 @@ def test_normalize_prefers_extended_over_description_tags():
     }
     norm = normalize_event(raw, calendar_id=FLIGHTY_CAL)
     assert norm["private_props"] == ext
-
-
-def test_normalize_malformed_tag_becomes_empty_dict():
-    # A malformed tag comment (API/client bug) must normalize to {} so the
-    # planner's .get() never crashes.
-    raw = {
-        "id": "e1",
-        "summary": "x",
-        "description": "<!--fa:{not json}-->",
-        **_timed("2026-07-01T10:00:00-05:00", "2026-07-01T11:00:00-05:00"),
-    }
-    norm = normalize_event(raw, calendar_id=FLIGHTY_CAL)
-    assert norm["private_props"] == {}
+    assert norm["description"] == "Gate B12"
 
 
 def test_normalize_with_classify_reclaim_sets_travel_flag():

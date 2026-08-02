@@ -45,8 +45,7 @@ from datetime import datetime, timedelta, timezone
 
 # Event-kind tags. Carried in `extendedProperties.private` (#193 writer flip);
 # the reconcile write helpers stamp them there and `normalize_event` decodes them
-# back to `private_props`, dual-source (the `<!--fa:-->` description comment is
-# still read for pre-flip events). `calendar_tags.TAG_KEYS` mirrors these.
+# back to `private_props`. `calendar_tags.TAG_KEYS` mirrors these.
 TAG_FLIGHT_ID = "faFlightId"
 TAG_KIND = "faKind"
 TAG_MANAGED = "faManaged"
