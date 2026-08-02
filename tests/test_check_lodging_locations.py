@@ -65,6 +65,7 @@ def test_reason_real_addresses_pass(check_lodging_locations):
         "Sommerrogata 1 Oslo 00 0255 NO",
         "611 Historic Nature Trail Gatlinburg TN 37738 US",
         "115 Devine St, San Antonio, TX 78210, USA",
+        "42 Main St, Deposit, NY 13754, USA",  # a real place named "Deposit"
     ):
         assert module.garbage_reason(addr) is None, addr
 

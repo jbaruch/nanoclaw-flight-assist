@@ -49,9 +49,11 @@ _CHECKIN_PREFIX = "Check-in:"
 _CURRENCY_RE = re.compile(r"[$€£₪¥₹]\s*\d")
 
 # Rate / fee wording TripIt drops into the address field. Word-bounded so it
-# can't fire on an address that merely contains one of the substrings.
+# can't fire on an address that merely contains one of the substrings. A bare
+# "deposit" is deliberately excluded — it is a real place name ("Deposit, NY"),
+# and a monetary deposit is already caught by `_CURRENCY_RE`.
 _FEE_KEYWORDS_RE = re.compile(
-    r"\b(?:resort fee|nightly rate|room rate|per night|deposit)\b|/\s*night",
+    r"\b(?:resort fee|nightly rate|room rate|per night)\b|/\s*night",
     re.IGNORECASE,
 )
 
