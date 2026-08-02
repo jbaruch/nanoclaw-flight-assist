@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.83 — 2026-08-02
+
 ### Added — check-travel-bookings: warn when a hotel stay's TripIt location is garbage
 
 TripIt sometimes drops a non-address into a Lodging's `location` — a resort-fee / rate note (`"Stay resort fee: $72.03"`) or a blank — which breaks drive planning (the anchor resolves nowhere) and reads as nonsense on the calendar. New `check-lodging-locations.py` scans `travel-schedule.json` (the only artifact carrying `location`) for upcoming stays and flags these; the `check-travel-bookings` skill now sends a Telegram warning naming the hotel, the bad value, and the check-in date. The fix is a manual TripIt edit, so this only detects and alerts — nothing is auto-corrected. It runs on-demand and nightly (via `nightly-travel-sync` Step 6, unchanged). Detection is deliberately conservative and fully enumerable (blank / currency amount / rate-fee keyword — never an "is this an address?" judgment), so real addresses never false-positive.
