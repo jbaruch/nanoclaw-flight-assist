@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "flight-assist"))
 
 import calendar_reconcile as cr  # noqa: E402
 from calendar_plan import _signature as _sig  # noqa: E402
-from calendar_tags import decode_private_props, encode_tags  # noqa: E402
+from calendar_tags import decode_private_props  # noqa: E402
 from google_calendar_client import GoogleCalendarError  # noqa: E402
 from state import (  # noqa: E402
     read_config,
@@ -151,17 +151,18 @@ def _raw_event(
 ) -> dict:
     """A Google-native raw event resource (normalize_event input shape).
 
-    A managed event's tags ride in the description's <!--fa:{...}--> comment,
-    so `private` encodes into the description exactly as the reconcile writes
-    it.
+    A managed event's tags ride in `extendedProperties.private`, exactly as the
+    reconcile writes them.
     """
     raw: dict = {
         "id": event_id,
         "summary": summary,
-        "description": encode_tags(description, private) if private else description,
+        "description": description,
         "start": {"dateTime": start},
         "end": {"dateTime": end},
     }
+    if private:
+        raw["extendedProperties"] = {"private": private}
     return raw
 
 
@@ -274,7 +275,7 @@ def test_patch_event_args_adopt_strips_legacy_description_tag():
         "calendar_id": BYAIR_CAL,
         "event_id": "e1",
         "body": {
-            "description": encode_tags("✈ BNA→YYZ • UA 8018", {"faFlightId": "1"}),
+            "description": '✈ BNA→YYZ • UA 8018\n<!--fa:{"faFlightId":"1"}-->',
             "private_props": {"faFlightId": "1", "faKind": "flight", "faManaged": "adopted"},
         },
     }

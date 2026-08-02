@@ -100,11 +100,10 @@ def normalize_event(raw_event: dict, *, calendar_id: str, classify_reclaim: bool
             primary); False for the byAir flight calendar.
 
     Returns the flat shape `plan_reconciliation` consumes. `private_props`
-    is flight-assist's managed-event tags, read dual-source by
-    `decode_private_props` — `extendedProperties.private` first, the
-    description's `<!--fa:{...}-->` comment second (#178) — `{}` when absent.
-    `description` is the human content with any tag comment stripped — the adopt
-    path re-appends the tags so they never accumulate.
+    is flight-assist's managed-event tags, read by `decode_private_props` from
+    `extendedProperties.private` — `{}` when absent. `description` is the human
+    content with any legacy tag comment stripped — the adopt path stamps the tags
+    into `extendedProperties.private` so they never accumulate on the description.
 
     Raises NormalizeError when the event has no `id`.
     """
