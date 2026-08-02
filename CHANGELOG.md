@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.82 — 2026-08-02
+
 ### Fixed — drive-engine: drop the dormant `<!--dengine:-->` description-reader fallback (#200)
 
 The drive-block writer moved its machine state to `extendedProperties.private` in
