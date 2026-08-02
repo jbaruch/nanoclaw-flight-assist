@@ -1,34 +1,19 @@
-"""Unified drive-block codec — marker, machine-state, and dual-source reader.
+"""Unified drive-block codec — machine-state writer and multi-shape reader.
 
 One codec for every drive block the engine writes, replacing the two legacy codecs
 (flight-assist `<!--fadrive:-->` and drive-planner `<!--dp:-->`).
 
-Where the machine state lives (the #178 migration)
---------------------------------------------------
-Historically all state rode in the event **description** — the Composio v3 toolkit
-this plugin shipped on exposed no writable `extendedProperties`, so the description
-was the only field that round-tripped. The native Calendar API (nanoclaw#638) does
-expose `extendedProperties.private`, so state moved off the human-visible
-description into that machine-only field. Blocks deployed before the flip still
-carry their state in the description, so the move is a live-data migration with a
-transition window, not a field swap: the READER accepts BOTH.
+Where the machine state lives
+-----------------------------
+State rides in the event's `extendedProperties.private` (the #178 target): a flat
+`dengine_*`-namespaced string map, the only value type the field accepts, one key
+per state field. `build_extended_properties` is the schema's source of truth and
+what `calendar_apply` writes on create/patch. The human line stays in the
+description on purpose — it is what the operator sees in the calendar UI; only the
+machine state lives in `extendedProperties`.
 
-`parse_block` reads `extendedProperties.private` FIRST and the description SECOND —
-whichever a block carries, it round-trips. `build_extended_properties` is the
-schema's source of truth and what `calendar_apply` now writes on create/patch;
-`build_description` produces the legacy description shape the reader still accepts
-for pre-flip blocks (and tests exercise). The human line stays in the description
-on purpose — it is what the operator sees in the calendar UI; only the machine
-state migrated. A pre-flip description-carried block is migrated to
-`extendedProperties` on its first shift, or ages out of the near-term window.
-
-Description shape (pre-flip / read-only): a human line, a self-marker, and a
-compact machine-state JSON comment. Extended-properties shape (current writer): a
-flat `dengine_*`-namespaced string map (the only value type
-`extendedProperties.private` accepts), one key per state field.
-
-Leg identity (the marker) follows #156 C1 / G4 and keys on the CANONICAL flight
-identity, never the designator:
+Leg identity follows #156 C1 / G4 and keys on the CANONICAL flight identity, never
+the designator:
 
     airport_departure / airport_arrival : <dep>-<arr>-<sched_dep_utc>   (+ kind)
     airport_transfer                    : <arr-flight-key>|<dep-flight-key>
@@ -37,16 +22,16 @@ identity, never the designator:
 so a codeshare tracked under two designators still maps to one block. `kind`
 disambiguates the departure vs arrival block on the same flight.
 
-Three-shape reader (#156 R4 cutover): `parse_block` recognizes the new
-`<!--dengine:-->` shape AND both legacy shapes, tagging each with its generation so
-the reconcile can converge prior-gen blocks (adopt-under-new-identity + delete
-legacy) and delete orphans, never double-stamp. Malformed / unrecognized events
-parse to None (never raise), so one bad event cannot abort a sweep.
+Multi-shape reader (#156 R4 cutover): `parse_block` reads the current unified state
+from `extendedProperties.private` AND recognizes both legacy description shapes,
+tagging each with its generation so the reconcile can converge prior-gen blocks
+(adopt-under-new-identity + delete legacy) and delete orphans, never double-stamp.
+Malformed / unrecognized events parse to None (never raise), so one bad event
+cannot abort a sweep.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -63,19 +48,7 @@ GEN_UNIFIED = "unified"
 GEN_LEGACY_FADRIVE = "legacy_fadrive"
 GEN_LEGACY_DP = "legacy_dp"
 
-# --- new unified marker + state ---------------------------------------------
-
-_MARKER_TEMPLATE = "[drive-engine:leg={identity}:kind={kind}]"
-_MARKER_RE = re.compile(r"\[drive-engine:leg=(?P<id>[^:\]]+):kind=(?P<kind>[^:\]]+)\]")
-_STATE_RE = re.compile(r"<!--dengine:(?P<json>\{.*?\})-->", re.DOTALL)
-
-_KEY_VERSION = "schema_version"
-_KEY_BASELINE = "b"
-_KEY_ANCHOR = "a"
-_KEY_WINDOW_END = "we"
-_KEY_ORIGIN = "o"
-_KEY_DESTINATION = "d"
-_KEY_ALERTED = "al"
+# --- alert values -----------------------------------------------------------
 
 ALERT_GROWTH = "growth"
 ALERT_LEAVE_NOW = "leave_now"
@@ -87,10 +60,9 @@ _ALERT_VALUES = (ALERT_GROWTH, ALERT_LEAVE_NOW)
 # tool that tags the event, so every key is `dengine_`-namespaced to avoid
 # clobbering a neighbour's tag. Values are always strings (the only type the field
 # accepts) — ints and datetimes are stringified on write and parsed back on read.
-# The version key is spelled out (not abbreviated like the compact description
-# keys) per `coding-policy: stateful-artifacts`, which requires every record to
-# carry an auditable `schema_version` field by that name; the namespace prefix
-# keeps it collision-safe in the shared map.
+# The version key is spelled out per `coding-policy: stateful-artifacts`, which
+# requires every record to carry an auditable `schema_version` field by that name;
+# the namespace prefix keeps it collision-safe in the shared map.
 _EXT_KEY_VERSION = "dengine_schema_version"
 _EXT_KEY_LEG = "dengine_leg"
 _EXT_KEY_KIND = "dengine_kind"
@@ -158,46 +130,6 @@ def parse_alerted(raw: object) -> frozenset:
 # --- build ------------------------------------------------------------------
 
 
-def build_marker(identity: str, kind: str) -> str:
-    """The self-marker token for a block serving leg `identity` of `kind`."""
-    if ":" in identity or "]" in identity:
-        raise ValueError(f"leg identity must not contain ':' or ']': {identity!r}")
-    return _MARKER_TEMPLATE.format(identity=identity, kind=kind)
-
-
-def build_description(
-    *,
-    summary: str,
-    identity: str,
-    kind: str,
-    baseline_seconds: int,
-    anchor: datetime,
-    origin: str,
-    destination: str,
-    window_end: datetime | None = None,
-    alerted: frozenset | set = frozenset(),
-) -> str:
-    """The full block description: human line + self-marker + state JSON comment.
-
-    Single source of the description format for both create and the
-    suppression-record PATCH. `window_end` is set only for transfer legs (the
-    other end of the window whose start is `anchor`).
-    """
-    state: dict[str, object] = {
-        _KEY_VERSION: UNIFIED_BLOCK_SCHEMA_VERSION,
-        _KEY_BASELINE: baseline_seconds,
-        _KEY_ANCHOR: anchor.isoformat(),
-        _KEY_ORIGIN: origin,
-        _KEY_DESTINATION: destination,
-        _KEY_ALERTED: serialize_alerted(alerted),
-    }
-    if window_end is not None:
-        state[_KEY_WINDOW_END] = window_end.isoformat()
-    marker = build_marker(identity, kind)
-    blob = json.dumps(state, separators=(",", ":"))
-    return f"{summary}\n{marker}\n<!--dengine:{blob}-->"
-
-
 def build_extended_properties(
     *,
     identity: str,
@@ -209,8 +141,8 @@ def build_extended_properties(
     window_end: datetime | None = None,
     alerted: frozenset | set = frozenset(),
 ) -> dict:
-    """The `extendedProperties` field VALUE carrying the same machine state as the
-    JSON comment — the #178 migration target and the schema's source of truth.
+    """The `extendedProperties` field VALUE carrying the block's machine state —
+    the #178 migration target and the schema's source of truth.
 
     Returns `{"private": {...}}`, the value of the event resource's
     `extendedProperties` field — NOT a full event body. A writer nests it under
@@ -220,8 +152,7 @@ def build_extended_properties(
     write, so whether Calendar merges or replaces the private map on patch does not
     matter. Every value is a string — the only type `extendedProperties.private`
     accepts — so `baseline_seconds` and the datetimes are stringified here and
-    parsed back in `parse_block`. `window_end` is emitted only for transfer legs,
-    matching `build_description`.
+    parsed back in `parse_block`. `window_end` is emitted only for transfer legs.
 
     Both the reader (`parse_block`) and the writer (`calendar_apply` create/patch)
     use this. It carries no human line — the description keeps that, since it is
@@ -242,7 +173,7 @@ def build_extended_properties(
     return {"private": private}
 
 
-# --- parse (dual-source, three-shape reader) --------------------------------
+# --- parse (extendedProperties + legacy-description reader) ------------------
 
 
 @dataclass(frozen=True)
@@ -323,11 +254,11 @@ def _event_extended_private(event: object) -> dict | None:
 def _parse_extended_block(private: dict, event_id: str | None) -> ParsedBlock | None:
     """Read a unified block off `extendedProperties.private`, or None to fall back.
 
-    Returns None (not a malformed-but-identified block) when the map carries no
-    current-version `dengine_*` state or lacks a usable leg identity — the caller
-    then tries the description. A version other than the current one reads as "no
-    unified state here" and falls back too, mirroring the description reader's
-    unknown-version handling.
+    Returns None when the map carries no current-version `dengine_*` state or lacks
+    a usable leg identity — the caller then tries the two legacy description readers
+    (fadrive / dp). A version other than the current one reads as "no unified state
+    here" and returns None too; the writer and reader ship together, so a mismatch
+    is only a transient rollout artifact that the next same-version sweep rewrites.
     """
     if private.get(_EXT_KEY_VERSION) != str(UNIFIED_BLOCK_SCHEMA_VERSION):
         return None
@@ -352,13 +283,13 @@ def _parse_extended_block(private: dict, event_id: str | None) -> ParsedBlock | 
 
 
 def parse_block(event: object) -> ParsedBlock | None:
-    """Read a drive block off a calendar event; dual-source, three-shape (#178, R4).
+    """Read a drive block off a calendar event; extendedProperties + legacy (#178, R4).
 
-    Prefers `extendedProperties.private` (the #178 migration target), falling back
-    to the description so a block written either way round-trips. Returns a
+    Reads the current unified state from `extendedProperties.private` (the #178
+    migration target), falling back to the two legacy description markers. Returns a
     ParsedBlock tagged with its generation, or None for an event that carries no
-    unified extended-properties state AND none of the three description markers (or
-    is malformed). Never raises — a single bad event must not abort a sweep.
+    unified extended-properties state AND neither legacy description marker (or is
+    malformed). Never raises — a single bad event must not abort a sweep.
     """
     eid = _event_id(event)
 
@@ -371,37 +302,6 @@ def parse_block(event: object) -> ParsedBlock | None:
     desc = _event_description(event)
     if desc is None:
         return None
-
-    unified_marker = _MARKER_RE.search(desc)
-    if unified_marker:
-        state: dict = {}
-        state_match = _STATE_RE.search(desc)
-        if state_match:
-            try:
-                state = json.loads(state_match["json"])
-            except (ValueError, TypeError):
-                state = {}
-        if state.get(_KEY_VERSION) != UNIFIED_BLOCK_SCHEMA_VERSION:
-            # Unknown version — treat as no usable prior state, but still identify
-            # the block by its marker so reconcile can rewrite it.
-            state = {}
-        baseline = state.get(_KEY_BASELINE)
-        return ParsedBlock(
-            generation=GEN_UNIFIED,
-            event_id=eid,
-            identity=unified_marker["id"],
-            kind=unified_marker["kind"],
-            baseline_seconds=baseline if isinstance(baseline, int) else None,
-            anchor=_parse_dt(state.get(_KEY_ANCHOR)),
-            window_end=_parse_dt(state.get(_KEY_WINDOW_END)),
-            origin=state.get(_KEY_ORIGIN) if isinstance(state.get(_KEY_ORIGIN), str) else None,
-            destination=(
-                state.get(_KEY_DESTINATION)
-                if isinstance(state.get(_KEY_DESTINATION), str)
-                else None
-            ),
-            alerted=parse_alerted(state.get(_KEY_ALERTED)),
-        )
 
     fadrive = _LEGACY_FADRIVE_MARKER_RE.search(desc)
     if fadrive and _LEGACY_FADRIVE_STATE_RE.search(desc):

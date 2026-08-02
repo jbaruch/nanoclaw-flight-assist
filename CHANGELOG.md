@@ -1,5 +1,14 @@
 # Changelog
 
+### Fixed — drive-engine: drop the dormant `<!--dengine:-->` description-reader fallback (#200)
+
+The drive-block writer moved its machine state to `extendedProperties.private` in
+#178, and the calendar has been verified to carry zero remaining description-carried
+`<!--dengine:-->` blocks. The now-dead unified description reader and its build/marker
+machinery are removed from the block codec; `parse_block` now reads unified state from
+`extendedProperties` and still recognizes the two legacy description shapes (fadrive,
+dp) for R4 cutover convergence.
+
 ## 0.2.81 — 2026-08-02
 
 ### Fixed — flight-assist: drop the dormant `<!--fa:-->` description-tag reader fallback (#200)

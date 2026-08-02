@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "skills" / "travel-core"))
 sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
+from block_codec import build_extended_properties  # noqa: E402
 from meeting_source import exclude_drive_block_events, meeting_desired_blocks  # noqa: E402
 
 UTC = timezone.utc
@@ -181,14 +182,20 @@ def test_exclude_drive_block_events_by_summary_prefix():
 
 
 def test_exclude_drive_block_events_by_marker():
-    # A drive block recognized by its codec marker is dropped even if some tool
+    # A drive block recognized by its codec state is dropped even if some tool
     # renamed the summary — no self-referential re-ingestion.
     events = [
         {
             "id": "d1",
             "summary": "renamed somehow",
-            "description": "x\n[drive-engine:leg=BNA-JFK-20200712T0900Z:kind=airport_departure]\n"
-            '<!--dengine:{"schema_version":1,"a":"2020-07-12T08:00:00+00:00"}-->',
+            "extendedProperties": build_extended_properties(
+                identity="BNA-JFK-20200712T0900Z",
+                kind="airport_departure",
+                baseline_seconds=600,
+                anchor=_dt(8, 0),
+                origin="Home",
+                destination="BNA",
+            ),
         },
         {"id": "e1", "summary": "Real meeting"},
     ]
@@ -210,8 +217,14 @@ def test_exclude_keeps_legacy_dp_blocks_for_scan_has_block():
         {
             "id": "de1",
             "summary": "Drive: Football",
-            "description": "y\n[drive-engine:leg=mtg8:kind=meeting_outbound]\n"
-            '<!--dengine:{"schema_version":1,"a":"2020-07-12T08:00:00+00:00"}-->',
+            "extendedProperties": build_extended_properties(
+                identity="mtg8",
+                kind="meeting_outbound",
+                baseline_seconds=600,
+                anchor=_dt(8, 0),
+                origin="Home",
+                destination="Venue",
+            ),
         },
         {"id": "m1", "summary": "Real meeting"},
     ]

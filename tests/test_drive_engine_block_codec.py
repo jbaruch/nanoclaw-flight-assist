@@ -1,9 +1,10 @@
-"""Tests for the unified drive-block codec and three-shape reader.
+"""Tests for the unified drive-block codec and multi-shape reader.
 
 Deterministic fixtures only — fixed tz-aware datetimes and hand-built events, no
 wall-clock. These pin: canonical (designator-free) leg identity; a round-trip
-build→parse of the new shape; the three-shape reader recognizing new + both legacy
-generations for cutover; and tolerant None on malformed / unmarked events.
+build→parse of the extendedProperties shape; the reader recognizing the unified
+state plus both legacy generations for cutover; and tolerant None on malformed /
+unmarked events.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from block_codec import (  # noqa: E402
     GEN_LEGACY_DP,
     GEN_LEGACY_FADRIVE,
     GEN_UNIFIED,
-    build_description,
     build_extended_properties,
     canonical_flight_key,
     leg_identity,
@@ -91,53 +91,7 @@ def test_departure_identity_is_the_single_flight():
     assert leg_identity(leg) == "BNA-JFK-20200712T0900Z"
 
 
-# --- build → parse round trip (unified) -------------------------------------
-
-
-def test_build_parse_round_trip():
-    desc = build_description(
-        summary="Drive: → BNA (DL4908)",
-        identity="BNA-JFK-20200712T0900Z",
-        kind="airport_departure",
-        baseline_seconds=1500,
-        anchor=_dt(8, 0),
-        origin="Hotel X",
-        destination="BNA",
-        alerted={ALERT_GROWTH},
-    )
-    event = {"id": "evt1", "description": desc}
-    parsed = parse_block(event)
-    assert parsed is not None
-    assert parsed.generation == GEN_UNIFIED
-    assert parsed.event_id == "evt1"
-    assert parsed.identity == "BNA-JFK-20200712T0900Z"
-    assert parsed.kind == "airport_departure"
-    assert parsed.baseline_seconds == 1500
-    assert parsed.anchor == _dt(8, 0)
-    assert parsed.origin == "Hotel X"
-    assert parsed.destination == "BNA"
-    assert parsed.alerted == frozenset({ALERT_GROWTH})
-
-
-def test_transfer_round_trip_carries_window_end():
-    desc = build_description(
-        summary="Drive: LHR → LGW",
-        identity="LHR-LHR-20200712T0900Z|LGW-JFK-20200712T1600Z",
-        kind="airport_transfer",
-        baseline_seconds=3600,
-        anchor=_dt(11, 0),
-        origin="LHR",
-        destination="LGW",
-        window_end=_dt(14, 0),
-        alerted={ALERT_GROWTH, ALERT_LEAVE_NOW},
-    )
-    parsed = parse_block({"id": "evtT", "description": desc})
-    assert parsed is not None
-    assert parsed.window_end == _dt(14, 0)
-    assert parsed.alerted == frozenset({ALERT_GROWTH, ALERT_LEAVE_NOW})
-
-
-# --- dual-source reader: extendedProperties (the #178 migration) ------------
+# --- reader: extendedProperties (the #178 migration) ------------------------
 
 
 def test_extended_properties_build_parse_round_trip():
@@ -214,36 +168,10 @@ def test_extended_properties_read_with_no_description_at_all():
     assert parsed.identity == "BNA-JFK-20200712T0900Z"
 
 
-def test_extended_properties_preferred_over_description():
-    # A block carrying BOTH (transition window) reads its state from
-    # extendedProperties, not the description.
-    ext = build_extended_properties(
-        identity="EXT-IDENTITY-20200712T0900Z",
-        kind="airport_departure",
-        baseline_seconds=1500,
-        anchor=_dt(8, 0),
-        origin="ExtOrigin",
-        destination="BNA",
-    )
-    desc = build_description(
-        summary="Drive: → BNA",
-        identity="DESC-IDENTITY-20200712T0900Z",
-        kind="airport_departure",
-        baseline_seconds=999,
-        anchor=_dt(7, 0),
-        origin="DescOrigin",
-        destination="BNA",
-    )
-    parsed = parse_block({"id": "evt1", "description": desc, **ext_event(ext)})
-    assert parsed is not None
-    assert parsed.identity == "EXT-IDENTITY-20200712T0900Z"
-    assert parsed.origin == "ExtOrigin"
-    assert parsed.baseline_seconds == 1500
-
-
-def test_extended_unknown_version_falls_back_to_description():
+def test_extended_unknown_version_is_no_unified_state():
     # An extendedProperties map at a version this codec does not accept is "no
-    # unified state here" — the reader falls back to a valid description.
+    # unified state here" — with no legacy description marker, the event parses to
+    # None rather than a bogus unified block.
     ext = build_extended_properties(
         identity="EXT-IDENTITY-20200712T0900Z",
         kind="airport_departure",
@@ -253,21 +181,10 @@ def test_extended_unknown_version_falls_back_to_description():
         destination="BNA",
     )
     ext["private"]["dengine_schema_version"] = "999"
-    desc = build_description(
-        summary="Drive: → BNA",
-        identity="DESC-IDENTITY-20200712T0900Z",
-        kind="airport_departure",
-        baseline_seconds=999,
-        anchor=_dt(7, 0),
-        origin="DescOrigin",
-        destination="BNA",
-    )
-    parsed = parse_block({"id": "evt1", "description": desc, **ext_event(ext)})
-    assert parsed is not None
-    assert parsed.identity == "DESC-IDENTITY-20200712T0900Z"
+    assert parse_block({"id": "evt1", **ext_event(ext)}) is None
 
 
-def test_extended_missing_leg_identity_falls_back_to_description():
+def test_extended_missing_leg_identity_is_no_unified_state():
     ext = build_extended_properties(
         identity="EXT-IDENTITY-20200712T0900Z",
         kind="airport_departure",
@@ -276,44 +193,11 @@ def test_extended_missing_leg_identity_falls_back_to_description():
         origin="ExtOrigin",
         destination="BNA",
     )
-    del ext["private"]["dengine_leg"]  # version matches but no identity → fall back
-    desc = build_description(
-        summary="Drive: → BNA",
-        identity="DESC-IDENTITY-20200712T0900Z",
-        kind="airport_departure",
-        baseline_seconds=999,
-        anchor=_dt(7, 0),
-        origin="DescOrigin",
-        destination="BNA",
-    )
-    parsed = parse_block({"id": "evt1", "description": desc, **ext_event(ext)})
-    assert parsed is not None
-    assert parsed.identity == "DESC-IDENTITY-20200712T0900Z"
+    del ext["private"]["dengine_leg"]  # version matches but no identity → not a block
+    assert parse_block({"id": "evt1", **ext_event(ext)}) is None
 
 
-def test_unrelated_extended_properties_ignored_description_still_read():
-    # A neighbour tool's private props (no dengine_* keys) must not shadow the
-    # description reader.
-    desc = build_description(
-        summary="Drive: → BNA",
-        identity="DESC-IDENTITY-20200712T0900Z",
-        kind="airport_departure",
-        baseline_seconds=1200,
-        anchor=_dt(8, 0),
-        origin="home",
-        destination="BNA",
-    )
-    event = {
-        "id": "evt1",
-        "description": desc,
-        "extendedProperties": {"private": {"someOtherTool": "x"}},
-    }
-    parsed = parse_block(event)
-    assert parsed is not None
-    assert parsed.identity == "DESC-IDENTITY-20200712T0900Z"
-
-
-# --- three-shape reader (cutover) -------------------------------------------
+# --- legacy-description reader (cutover) -------------------------------------
 
 
 def test_reads_legacy_fadrive_block():
@@ -354,27 +238,3 @@ def test_missing_description_is_none():
     assert parse_block({"id": "x"}) is None
     assert parse_block("not a dict") is None
     assert parse_block(None) is None
-
-
-def test_unified_marker_with_corrupt_state_still_identifies():
-    desc = (
-        "Drive: → BNA\n"
-        "[drive-engine:leg=BNA-JFK-20200712T0900Z:kind=airport_departure]\n"
-        "<!--dengine:{bad json-->"
-    )
-    parsed = parse_block({"id": "e", "description": desc})
-    assert parsed is not None
-    assert parsed.generation == GEN_UNIFIED
-    assert parsed.identity == "BNA-JFK-20200712T0900Z"
-    assert parsed.anchor is None  # unparseable state → no usable fields
-
-
-def test_unknown_version_treated_as_no_usable_state():
-    desc = (
-        "Drive: → BNA\n[drive-engine:leg=BNA-JFK-20200712T0900Z:kind=airport_departure]\n"
-        '<!--dengine:{"schema_version":999,"a":"2020-07-12T08:00:00+00:00"}-->'
-    )
-    parsed = parse_block({"id": "e", "description": desc})
-    assert parsed is not None
-    assert parsed.generation == GEN_UNIFIED
-    assert parsed.anchor is None  # version mismatch → fields dropped
