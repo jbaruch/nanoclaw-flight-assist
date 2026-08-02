@@ -2,7 +2,7 @@
 
 `resolve_skip` is pure (raw events -> a skip target or same-name candidates) and
 tested here without any calendar I/O. Deterministic fixtures: hand-built events
-whose descriptions round-trip through the unified block codec.
+whose `extendedProperties` round-trip through the unified block codec.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
 import skip_drive  # noqa: E402
-from block_codec import build_description  # noqa: E402
+from block_codec import build_extended_properties  # noqa: E402
 from skip_drive import SkipTarget, resolve_skip  # noqa: E402
 
 UTC = timezone.utc
@@ -32,8 +32,7 @@ def _event(
 ):
     anchor = anchor or _anchor(18, 15, 35)
     summary = f"Drive: {meeting}"
-    desc = build_description(
-        summary=summary,
+    ext = build_extended_properties(
         identity=identity,
         kind=kind,
         baseline_seconds=600,
@@ -45,7 +44,8 @@ def _event(
         "id": eid,
         "summary": summary,
         "start": {"dateTime": start_local or "2020-07-18T10:35:00-05:00"},
-        "description": desc,
+        "description": summary,
+        "extendedProperties": ext,
     }
 
 
