@@ -95,6 +95,21 @@ def detect_new_trips(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def check_lodging_locations(tmp_path, monkeypatch):
+    """Load check-travel-bookings/scripts/check-lodging-locations.py with
+    `SCHEDULE_PATH` redirected at tmp_path. Returned tuple is
+    (module, schedule_path) — the file is NOT created so callers choose
+    absent / present."""
+    schedule_path = tmp_path / "travel-schedule.json"
+    module = _load(
+        "check_lodging_locations_under_test",
+        "skills/check-travel-bookings/scripts/check-lodging-locations.py",
+    )
+    monkeypatch.setattr(module, "SCHEDULE_PATH", str(schedule_path))
+    return module, schedule_path
+
+
+@pytest.fixture
 def check_travel_bookings(tmp_path, monkeypatch):
     """Load check-travel-bookings/scripts/check-travel-bookings.py
     with `DB_PATH` and `STATE_PATH` redirected at tmp_path. Returned

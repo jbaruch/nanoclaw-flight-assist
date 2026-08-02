@@ -1,13 +1,13 @@
 ---
 name: check-travel-bookings
-description: Checks upcoming trips for missing bookings (flights, hotels, accommodation) by reading the nightly-built `travel-db.json`. Reports gaps for all upcoming trips — no date limit. Supports snooze state. Silent when all bookings are complete or snoozed. Use when the user asks about upcoming travel plans, itinerary completeness, missing reservations, or TripIt trip status.
+description: Checks upcoming trips for missing bookings (flights, hotels, accommodation) by reading the nightly-built `travel-db.json`, and warns when a hotel stay's TripIt location is a garbage value (a fee/rate note or blank) that needs a manual TripIt edit. Reports gaps for all upcoming trips — no date limit. Supports snooze state. Silent when all bookings are complete and every hotel location is a plausible address (or snoozed). Use when the user asks about upcoming travel plans, itinerary completeness, missing reservations, hotel address problems, or TripIt trip status.
 ---
 
 # Check Travel Bookings
 
 Process steps in order. Do not skip ahead. Run the script — do not implement the detection logic yourself.
 
-## Step 1 — Run the script
+## Step 1 — Run the booking-gap script
 
 ```bash
 python3 /home/node/.claude/skills/tessl__check-travel-bookings/scripts/check-travel-bookings.py
@@ -31,11 +31,33 @@ The script outputs JSON:
 
 Proceed immediately to Step 2.
 
-## Step 2 — Interpret and report
+## Step 2 — Run the hotel-location check
 
-If `gaps` is empty, stay silent (proceed silently — no output).
+```bash
+python3 /home/node/.claude/skills/tessl__check-travel-bookings/scripts/check-lodging-locations.py
+```
 
-If `gaps` is present, format as Telegram HTML (`parse_mode=HTML`). If conversion needed, pipe through `/workspace/group/scripts/sanitize-html.py` (Markdown → Telegram HTML):
+The script outputs JSON:
+```json
+{
+  "garbage_lodging": [
+    {"hotel": "Hilton Amsterdam Airport Schiphol", "location": "Stay resort fee: $72.03", "checkin": "2026-09-07", "reason": "location looks like a fee/rate note, not an address"}
+  ],
+  "checked_at": "2026-08-02T15:00:00Z"
+}
+```
+
+Each entry is an upcoming stay whose TripIt `location` is not a usable address — a fee/rate note or a blank — which breaks drive planning and reads as nonsense on the calendar. Detection lives in `scripts/check-lodging-locations.py`; the skill consumes the output and does not re-derive it. The script always exits 0 (a missing/unreadable schedule yields an empty `garbage_lodging` list — schedule freshness is `nightly-travel-sync`'s alert surface, not this check's).
+
+Proceed immediately to Step 3.
+
+## Step 3 — Interpret and report
+
+If `gaps` AND `garbage_lodging` are both empty, stay silent (proceed silently — no output).
+
+Report each present block as Telegram HTML (`parse_mode=HTML`). If conversion is needed, pipe through `/workspace/group/scripts/sanitize-html.py` (Markdown → Telegram HTML).
+
+**Booking gaps** (`gaps` non-empty):
 
 ```
 <b>Travel bookings to sort out:</b>
@@ -45,9 +67,17 @@ If `gaps` is present, format as Telegram HTML (`parse_mode=HTML`). If conversion
 
 Date range: `May 24–Jun 1` (abbreviated month, no year unless spans years).
 
-If the user is acting on a gap (snooze/resolve), proceed to Step 3. Otherwise finish here.
+**Hotel-location warnings** (`garbage_lodging` non-empty) — the fix is a manual TripIt edit, so name the hotel and the bad value and tell the operator to correct the address in TripIt:
 
-## Step 3 — Update snooze state
+```
+<b>⚠️ Hotel location needs a TripIt fix:</b>
+
+• [hotel] (check-in [date]) — [reason]: "[location]"
+```
+
+Relay the script's `location` and `reason` verbatim. When both blocks are present, send them together (one message, two labelled sections). If the user is acting on a gap (snooze/resolve), proceed to Step 4. Otherwise finish here.
+
+## Step 4 — Update snooze state
 
 Only run this step when Baruch snoozes or resolves a trip. Invoke the bundled mutation script; do not hand-edit `/workspace/group/travel-booking-state.json` directly. The slug-to-trip fuzzy-match (e.g., "snooze JNation" → `jnation-2026-05`) stays in the agent's hands per `coding-policy: script-delegation`; the script handles the deterministic JSON mutation.
 
