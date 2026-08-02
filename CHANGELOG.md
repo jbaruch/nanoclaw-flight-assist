@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.81 — 2026-08-02
+
 ### Fixed — flight-assist: drop the dormant `<!--fa:-->` description-tag reader fallback (#200)
 
 `decode_private_props` no longer falls back to the `<!--fa:{...}-->` description
