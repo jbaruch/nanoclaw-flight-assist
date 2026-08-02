@@ -254,11 +254,11 @@ def _event_extended_private(event: object) -> dict | None:
 def _parse_extended_block(private: dict, event_id: str | None) -> ParsedBlock | None:
     """Read a unified block off `extendedProperties.private`, or None to fall back.
 
-    Returns None (not a malformed-but-identified block) when the map carries no
-    current-version `dengine_*` state or lacks a usable leg identity — the caller
-    then tries the description. A version other than the current one reads as "no
-    unified state here" and falls back too, mirroring the description reader's
-    unknown-version handling.
+    Returns None when the map carries no current-version `dengine_*` state or lacks
+    a usable leg identity — the caller then tries the two legacy description readers
+    (fadrive / dp). A version other than the current one reads as "no unified state
+    here" and returns None too; the writer and reader ship together, so a mismatch
+    is only a transient rollout artifact that the next same-version sweep rewrites.
     """
     if private.get(_EXT_KEY_VERSION) != str(UNIFIED_BLOCK_SCHEMA_VERSION):
         return None
