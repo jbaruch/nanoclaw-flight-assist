@@ -76,10 +76,11 @@ BLOCK_SCHEMA_VERSION = 1
 
 # The machine state rides in an HTML comment so it stays out of the way in
 # calendar UIs while remaining round-trippable. Short keys keep it compact.
-# Distinct `fadrive:` prefix (not `fa:`): flight-assist's calendar_tags.py
-# still reads legacy `<!--fa:{...}-->` boarding/flight event tags (#193 moved the
-# writer to extendedProperties, but pre-flip events keep the comment), so the airport
-# drive block carries its own prefix to avoid matching those event comments.
+# Distinct `fadrive:` prefix (not `fa:`): historically flight-assist's
+# calendar_tags.py read `<!--fa:{...}-->` boarding/flight event tags, so the
+# airport drive block carried its own prefix to avoid matching those. #200
+# dropped that description reader (tags live in extendedProperties now); the
+# distinct prefix is retained for the airport block's own description state.
 _STATE_RE = re.compile(r"<!--fadrive:(?P<json>\{.*?\})-->", re.DOTALL)
 # The version key is spelled out (`schema_version`), not abbreviated like the
 # other keys: `coding-policy: stateful-artifacts` requires every record to

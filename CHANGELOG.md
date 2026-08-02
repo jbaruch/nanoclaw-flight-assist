@@ -1,6 +1,6 @@
 # Changelog
 
-### Fixed — flight-assist: drop the dormant <!--fa:--> description-tag reader fallback (#200)
+### Fixed — flight-assist: drop the dormant `<!--fa:-->` description-tag reader fallback (#200)
 
 `decode_private_props` no longer falls back to the `<!--fa:{...}-->` description
 comment — it reads managed tags only from `extendedProperties.private`, the sole
