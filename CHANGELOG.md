@@ -1,5 +1,21 @@
 # Changelog
 
+### Fixed — sync-tripit: declare a precheck budget so the delegation timeout can actually fire (#212)
+
+`_SYNC_SUBPROCESS_TIMEOUT = 60.0` was a bare literal sitting behind a wall half its size. Pre-`jbaruch/nanoclaw#890` the agent-runner SIGTERMed every precheck at a flat 30s, so the `subprocess.TimeoutExpired` handler in `main()` could never run: a hung `sync_tripit.py` surfaced as `precheck-error: execfile-error` with no payload instead of the safe-shape `{"wake_agent": false, "data": {"reason": "sync_subprocess_timeout"}}` the handler already emitted. The branch was dead code for the life of the skill.
+
+`#890` removed that flat global and made the budget per-skill, which un-buried the branch but replaced the problem with the opposite one: a skill declaring nothing now runs unbounded up to the container kill (`MAINTENANCE_CONTAINER_TIMEOUT`, 300s). sync-tripit's cadence is `*/5 * * * *` — the same 300s — so an undeclared wedge runs right up to the moment the next fire is due and is still holding the maintenance slot when it arrives.
+
+sync-tripit now declares `precheck_timeout_ms: 90000` and derives the delegation budget from it: `_SCRIPT_KILL_BUDGET_SECONDS - _INTERPRETER_TEARDOWN_HEADROOM_SECONDS`, leaving the handler room to write its stderr note and payload before the kill lands. It joins flight-assist (30s at a 2-min cadence) as the second travel precheck to declare one; every other travel precheck still deliberately declares nothing, `drive-engine` especially.
+
+The effective delegation budget moves 60s → 86s. Deliberately loosened, not tightened: `sync-tripit` has never hit the wall across 3,108 runs, so this is an unreachable-handler correctness fix and a tighter number would start deferring real work it had time to do.
+
+`sync_tripit.py` also bounds its own byAir client at 20s (`_BYAIR_CALL_TIMEOUT_SECONDS`) instead of riding the client's 30s default — the inner-vs-outer collision `#28` fixed for `flight-assist` and the second half of `#212`'s scope. A hung upstream now fails fast into the existing `URLError` transient-transport branch, which skips the pass and lets the next 5-min fire retry, rather than consuming a third of the subprocess budget and losing the diff to a blunt kill.
+
+Coverage: new `tests/test_sync_tripit_precheck_budget.py` locks the chain `byAir per-call < subprocess < declared kill` and asserts the SKILL.md declaration and the script constant stay one number (the same drift `#890` opened for flight-assist). New `test_subprocess_timeout_branch_is_reachable` drives a genuinely hung child through the real `subprocess.run` call site — the pre-existing timeout test raises `TimeoutExpired` directly, which proves the handler converts but not that anything can reach it, and reachability is precisely what `#212` was about.
+
+Also corrects `sync_tripit.py`'s module docstring, which still claimed "Run cadence: daily at ~04:00 local" — a claim untrue since the `sync-tripit` scheduler took over invocation.
+
 ## 0.2.83 — 2026-08-02
 
 ### Added — check-travel-bookings: warn when a hotel stay's TripIt location is garbage

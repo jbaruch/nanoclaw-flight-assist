@@ -296,9 +296,9 @@ def test_main_handles_empty_sync_subprocess_stdout(state_root, monkeypatch):
 
 
 def test_main_handles_subprocess_timeout(state_root, monkeypatch):
-    """A hung sync_tripit subprocess that breaches the 60s budget must be
-    converted to a safe-shape wake_agent=false payload, not an unhandled
-    exception that the agent-runner reads as 'skip wake'."""
+    """A hung sync_tripit subprocess that breaches the delegation budget
+    must be converted to a safe-shape wake_agent=false payload, not an
+    unhandled exception that the agent-runner reads as 'skip wake'."""
     import subprocess as _subprocess
 
     now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=timezone.utc)
@@ -320,6 +320,52 @@ def test_main_handles_subprocess_timeout(state_root, monkeypatch):
     payload = json.loads(buf.getvalue().strip())
     assert payload["wake_agent"] is False
     assert payload["data"]["reason"] == "sync_subprocess_timeout"
+
+
+def test_subprocess_timeout_branch_is_reachable(state_root, monkeypatch, tmp_path):
+    """The `TimeoutExpired` handler is reachable by a real hung child.
+
+    `test_main_handles_subprocess_timeout` above raises the exception
+    directly. That proves the handler CONVERTS correctly but not that
+    anything can reach it — and for the life of this skill nothing could:
+    the agent-runner's flat 30s precheck kill landed before the 60s
+    subprocess timeout could fire, so a hung sync surfaced as
+    `execfile-error` with no payload and the branch was dead code (#212).
+
+    This drives a genuinely hung child through the real
+    `subprocess.run(timeout=...)` call site, so a future budget change
+    that re-buries the branch fails here instead of silently reverting to
+    the no-payload shape.
+    """
+    hung_child = tmp_path / "hung_sync_tripit.py"
+    hung_child.write_text("import time\n\ntime.sleep(30)\n", encoding="utf-8")
+
+    now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=timezone.utc)
+    write_flight_state(_flight_state(910, dep_time=now + timedelta(hours=2)))
+    write_active_flights([910])
+
+    # Shrink the budget rather than waiting out the real one; the call
+    # site under test is the unmocked `subprocess.run`.
+    monkeypatch.setattr(precheck, "_SYNC_SUBPROCESS_TIMEOUT", 0.5)
+    monkeypatch.setattr(precheck, "_load_flight_assist", lambda: (state_module, hung_child))
+
+    buf = _capture_stdout(monkeypatch)
+    started = time.monotonic()
+    with patch("sync_tripit_precheck.datetime") as mock_datetime:
+        mock_datetime.now.return_value = now
+        mock_datetime.fromisoformat = datetime.fromisoformat
+        mock_datetime.fromtimestamp = datetime.fromtimestamp
+        rc = precheck.main()
+    elapsed = time.monotonic() - started
+
+    assert rc == 0
+    payload = json.loads(buf.getvalue().strip())
+    assert payload["wake_agent"] is False
+    assert payload["data"]["reason"] == "sync_subprocess_timeout"
+    assert elapsed < 10, (
+        f"the child ran {elapsed:.1f}s against a 0.5s budget — the delegation "
+        "was not actually bounded by the timeout"
+    )
 
 
 def test_main_outer_boundary_catches_unexpected_exception(state_root, monkeypatch):

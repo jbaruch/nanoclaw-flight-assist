@@ -14,9 +14,11 @@ agent about; false otherwise. Per `coding-policy: script-delegation`
 Uses the outer-boundary-process-contract carve-out for unexpected
 exceptions per `coding-policy: error-handling`.
 
-Run cadence: daily at ~04:00 local. The precheck script also calls
-into sync logic opportunistically when it encounters a flight_id
-not in state — both paths share `_reconcile_active_flights()`.
+Invocation: the `sync-tripit` skill's precheck delegates to this script
+as a subprocess when its adaptive gate passes (cadence `*/5 * * * *`,
+gated on an imminent flight or a stale index). The flight-assist precheck
+also calls into sync logic opportunistically when it encounters a
+flight_id not in state — both paths share `_reconcile_active_flights()`.
 
 stdlib-only: `json`, `sys`, `traceback` per `coding-policy:
 dependency-management`.
@@ -42,6 +44,22 @@ from state import (  # noqa: E402
     write_active_flights,
     write_flight_state,
 )
+
+# Per-call timeout for the byAir HTTP client below. `ByAirClient`'s own
+# default is 30s, and this script runs as a subprocess inside sync-tripit's
+# precheck budget (`_SYNC_SUBPROCESS_TIMEOUT` in
+# `skills/sync-tripit/precheck.py`, derived from the 90s kill that skill
+# declares). A call left at the client default would spend a third of that
+# budget on one hung upstream.
+#
+# 20s fails fast into the `urllib.error.URLError` transient-transport
+# branch in `_run_sync`, which skips the pass and lets the next 5-min fire
+# retry — a graceful, diagnosable outcome. Riding the outer subprocess
+# timeout instead loses the diff entirely and emits a bare
+# `sync_subprocess_timeout`. Bounding it here, at the construction site,
+# keeps the bound true for every caller of this script rather than only
+# the precheck path. Per #212; same inner-vs-outer collision as #28.
+_BYAIR_CALL_TIMEOUT_SECONDS = 20.0
 
 
 def main() -> int:
@@ -103,7 +121,7 @@ def _emit_diff(diff: dict) -> None:
 
 def _run_sync(*, now_utc: datetime) -> dict:
     """Execute one sync pass, returning the {added, removed} diff."""
-    byair = ByAirClient.from_env()
+    byair = ByAirClient.from_env(timeout=_BYAIR_CALL_TIMEOUT_SECONDS)
     try:
         # ownership="mine" so friends' tracked trips never enter the
         # active-flights index. byAir's default is "all", which pulled in
