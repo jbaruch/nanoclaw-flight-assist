@@ -1,5 +1,11 @@
 # Changelog
 
+### Changed — retire Dependabot again; Renovate stays the sole scanner
+
+`.github/dependabot.yml` came back in #208 and is removed for the second time. c8988f2 had already retired it in July for the duplicate-PR problem — both scanners cover the same two managers (`github-actions`, `pip` via `requirements-dev.txt`), so every upstream release arrives twice and each merge publishes a version. #208 re-added it on the premise that the repo "had no scanner config", which was not the case; Renovate has onboarded since #109 and has opened every dependency PR this repo has seen (12 of them), while the re-added Dependabot opened none in the two weeks it sat there.
+
+The pin #208 wanted covered — the SHA-pinned reusable publish workflow in `.github/workflows/publish.yml` — is renewed by Renovate: it extracts as a `github-tags` digest dep (confirmed with `renovate --platform=local --dry-run=extract`, and historically via the `Update jbaruch/coding-policy digest to <sha>` PRs #148, #152, #207 and #209). The Dependency Dashboard prints that pin as a blank row because a digest-only dep carries no `currentValue` to render — that blank is a display artifact, not a coverage gap, and is the likely reason the pin looked unmanaged. `renovate.json` now carries a top-level `description` recording all of this so the third re-add doesn't happen. GitHub-native Dependabot **security** alerts remain a repo setting, unaffected by this file.
+
 ## 0.2.84 — 2026-08-05
 
 ### Fixed — sync-tripit: declare a precheck budget so the delegation timeout can actually fire (#212)
