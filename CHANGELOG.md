@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.84 — 2026-08-05
+
 ### Fixed — sync-tripit: declare a precheck budget so the delegation timeout can actually fire (#212)
 
 `_SYNC_SUBPROCESS_TIMEOUT = 60.0` was a bare literal sitting behind a wall half its size. Pre-`jbaruch/nanoclaw#890` the agent-runner SIGTERMed every precheck at a flat 30s, so the `subprocess.TimeoutExpired` handler in `main()` could never run: a hung `sync_tripit.py` surfaced as `precheck-error: execfile-error` with no payload instead of the safe-shape `{"wake_agent": false, "data": {"reason": "sync_subprocess_timeout"}}` the handler already emitted. The branch was dead code for the life of the skill.
