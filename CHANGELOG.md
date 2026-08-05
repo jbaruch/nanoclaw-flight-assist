@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.85 — 2026-08-05
+
 ### Changed — retire Dependabot again; Renovate stays the sole scanner
 
 `.github/dependabot.yml` came back in #208 and is removed for the second time. c8988f2 had already retired it in July for the duplicate-PR problem — both scanners cover the same two managers (`github-actions`, `pip` via `requirements-dev.txt`), so every upstream release arrives twice and each merge publishes a version. #208 re-added it on the premise that the repo "had no scanner config", which was not the case; Renovate has onboarded since #109 and has opened every dependency PR this repo has seen (12 of them), while the re-added Dependabot opened none in the two weeks it sat there.
