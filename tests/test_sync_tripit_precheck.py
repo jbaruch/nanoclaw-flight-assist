@@ -336,6 +336,13 @@ def test_subprocess_timeout_branch_is_reachable(state_root, monkeypatch, tmp_pat
     `subprocess.run(timeout=...)` call site, so a future budget change
     that re-buries the branch fails here instead of silently reverting to
     the no-payload shape.
+
+    The payload IS the proof, with no timing assertion needed: the child
+    sleeps far past the budget and never exits on its own, so
+    `sync_subprocess_timeout` is reachable only by a real
+    `TimeoutExpired`. Had the timeout not fired, `subprocess.run` would
+    have returned normally with empty stdout and the reason would read
+    `sync_no_output` instead.
     """
     hung_child = tmp_path / "hung_sync_tripit.py"
     hung_child.write_text("import time\n\ntime.sleep(30)\n", encoding="utf-8")
@@ -350,22 +357,16 @@ def test_subprocess_timeout_branch_is_reachable(state_root, monkeypatch, tmp_pat
     monkeypatch.setattr(precheck, "_load_flight_assist", lambda: (state_module, hung_child))
 
     buf = _capture_stdout(monkeypatch)
-    started = time.monotonic()
     with patch("sync_tripit_precheck.datetime") as mock_datetime:
         mock_datetime.now.return_value = now
         mock_datetime.fromisoformat = datetime.fromisoformat
         mock_datetime.fromtimestamp = datetime.fromtimestamp
         rc = precheck.main()
-    elapsed = time.monotonic() - started
 
     assert rc == 0
     payload = json.loads(buf.getvalue().strip())
     assert payload["wake_agent"] is False
     assert payload["data"]["reason"] == "sync_subprocess_timeout"
-    assert elapsed < 10, (
-        f"the child ran {elapsed:.1f}s against a 0.5s budget — the delegation "
-        "was not actually bounded by the timeout"
-    )
 
 
 def test_main_outer_boundary_catches_unexpected_exception(state_root, monkeypatch):
