@@ -88,6 +88,29 @@ def test_sync_fetches_only_owned_trips(state_root: Path):
     mock_byair.return_value.list_trips.assert_called_once_with(status="active", ownership="mine")
 
 
+def test_sync_bounds_the_byair_client_below_the_precheck_budget(state_root: Path):
+    """#212: the client must be constructed with the bounded per-call
+    timeout, not left on `ByAirClient`'s 30s default.
+
+    This script runs as a subprocess inside sync-tripit's precheck budget.
+    A call left at the default spends a third of that budget on one hung
+    upstream and rides the outer subprocess timeout — losing the diff and
+    emitting a bare `sync_subprocess_timeout` — instead of failing fast
+    into the `URLError` transient branch that skips the pass and lets the
+    next 5-min fire retry.
+
+    Asserted at the construction site, not just as a constant: the
+    ordering checks in `test_sync_tripit_precheck_budget.py` all still
+    pass if the `timeout=` argument is dropped here.
+    """
+    payload = _trips_payload([_flight(100)])
+    fake_now = datetime(2026, 5, 18, 4, 0, 0, tzinfo=timezone.utc)
+    with patch("sync_tripit.ByAirClient.from_env") as mock_byair:
+        mock_byair.return_value.list_trips.return_value = payload
+        sync_tripit._run_sync(now_utc=fake_now)
+    mock_byair.assert_called_once_with(timeout=sync_tripit._BYAIR_CALL_TIMEOUT_SECONDS)
+
+
 def test_sync_with_unchanged_upstream_no_diff(state_root: Path):
     write_active_flights([100])
     sync_tripit.initialize_flight_from_byair(

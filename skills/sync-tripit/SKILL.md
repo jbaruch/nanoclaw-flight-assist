@@ -4,6 +4,7 @@ description: "Adaptive scheduler for the TripIt/byAir refresh of active-flights.
 cadence: "*/5 * * * *"
 agentModel: "claude-haiku-4-5-20251001"
 script: "precheck.py"
+precheck_timeout_ms: 90000
 user-invocable: false
 ---
 

@@ -65,10 +65,38 @@ _FLIGHT_ASSIST_DEV = Path(__file__).resolve().parent.parent / "flight-assist"
 _IMMINENT_FLIGHT_WINDOW = timedelta(hours=24)
 _STALE_STATE_THRESHOLD = timedelta(hours=6)
 
-# Subprocess timeout for the sync_tripit.py delegation. byAir has a per-
-# call 30s timeout in its own client; one list_trips + N per-flight
-# state writes is bounded comfortably below 60s.
-_SYNC_SUBPROCESS_TIMEOUT = 60.0
+# The agent-runner hard-kills this precheck at the budget the skill
+# declares for itself — `precheck_timeout_ms: 90000` in SKILL.md — and
+# surfaces that kill as `execfile-error` with no payload.
+#
+# That declaration and `_SCRIPT_KILL_BUDGET_SECONDS` are ONE number in two
+# places and MUST move together; the constant is the seconds form of the
+# frontmatter value. Before jbaruch/nanoclaw#890 the agent-runner applied a
+# flat 30s to every precheck, so the 60s subprocess timeout this file used
+# to carry sat behind a wall half its size: the `subprocess.TimeoutExpired`
+# handler in main() could never run, and a hung delegation surfaced as
+# `execfile-error` with no payload instead of the safe-shape wake payload
+# the handler emits (#212). #890 made the budget per-skill and removed the
+# global — a skill that declares nothing now runs unbounded up to the
+# container kill (`MAINTENANCE_CONTAINER_TIMEOUT`, 300s).
+#
+# sync-tripit declares 90s rather than nothing because its cadence is
+# `*/5 * * * *` — 300s, the same as that container kill. An undeclared
+# wedge would run until the moment the next fire is due and still be
+# holding the maintenance slot. flight-assist declares 30s for the same
+# reason at a 2-min cadence; every other travel precheck deliberately
+# declares nothing.
+#
+# The subprocess budget is the kill budget minus headroom for the child
+# interpreter's startup plus this process's own teardown — writing the
+# stderr note and the safe-shape payload once `TimeoutExpired` fires — so
+# the handler always completes before the kill lands. Deriving it keeps the
+# relation correct if the declared budget moves. The byAir per-call bound
+# that has to fit INSIDE this budget lives at its construction site,
+# `flight-assist/sync_tripit.py:_BYAIR_CALL_TIMEOUT_SECONDS`.
+_SCRIPT_KILL_BUDGET_SECONDS = 90.0
+_INTERPRETER_TEARDOWN_HEADROOM_SECONDS = 4.0
+_SYNC_SUBPROCESS_TIMEOUT = _SCRIPT_KILL_BUDGET_SECONDS - _INTERPRETER_TEARDOWN_HEADROOM_SECONDS
 
 
 def _load_flight_assist() -> tuple[ModuleType, Path]:
