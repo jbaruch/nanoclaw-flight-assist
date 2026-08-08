@@ -518,7 +518,7 @@ def test_flight_summaries_includes_date_only_flight_segments():
 
 
 # ---------------------------------------------------------------------------
-# When the trip begins — transport OR check-in, whichever comes first (#233)
+# When the trip begins — transport departure, check-in only as a fallback (#233)
 # ---------------------------------------------------------------------------
 
 

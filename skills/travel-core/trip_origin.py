@@ -336,10 +336,12 @@ def resolve_anchor(
     # Before the trip begins the operator is still home — the date-only Trip
     # wrapper is "active" on the first day, but anchoring an outbound drive at
     # the destination draws a cross-country "drive" (the 34-hour San
-    # Francisco→BNA block for a BNA→SFO trip). "Begins" is the earliest of the
-    # first transport departure and the first lodging check-in, so a flight-less
-    # drive trip is gated too and an airport hotel the night before an early
-    # flight is not read as home (`_trip_begins_at`, #233).
+    # Francisco→BNA block for a BNA→SFO trip). "Begins" is the first transport
+    # departure, falling back to the first lodging check-in when the trip has
+    # none, so a flight-less drive trip is gated too (`_trip_begins_at`, #233).
+    # Transport still wins whenever it exists: a pre-flight staging hotel does
+    # NOT begin the trip, and the morning of an early flight still reads home
+    # (#235).
     begins_at = _trip_begins_at(schedule, trip_start, trip_end)
     if begins_at is not None and at_utc < begins_at:
         return TripAnchor(
