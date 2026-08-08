@@ -18,6 +18,19 @@ Alerts on transport (Flight or Rail) + Lodging gaps; all item types are in the D
 import json
 import sys
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+# travel-core owns the `Check-in:` / `Check-out:` discriminator. Runtime mount
+# first, dev-clone sibling fallback for CI (travel-core's SKILL.md pattern; this
+# script sits one level deeper, under `scripts/`).
+_BUNDLE_DIR = Path(__file__).resolve().parent.parent
+_TRAVEL_CORE = Path("/home/node/.claude/skills/tessl__travel-core")
+if not _TRAVEL_CORE.is_dir():
+    _TRAVEL_CORE = _BUNDLE_DIR.parent / "travel-core"
+if str(_TRAVEL_CORE) not in sys.path:
+    sys.path.insert(0, str(_TRAVEL_CORE))
+
+from lodging import CHECK_IN, CHECK_OUT, hotel_name, lodging_role  # noqa: E402
 
 DB_PATH = "/workspace/group/travel-db.json"
 STATE_PATH = "/workspace/group/travel-booking-state.json"
@@ -63,11 +76,13 @@ def build_lodging_ranges(lodging_items: list[dict]) -> list[tuple]:
         dtstart = item.get("dtstart")
         if dtstart is None:
             continue
-        if summary.startswith("Check-in:"):
-            hotel = summary[len("Check-in:") :].strip()
+        role = lodging_role(summary)
+        hotel = hotel_name(summary)
+        if hotel is None:
+            continue
+        if role == CHECK_IN:
             checkins.setdefault(hotel, []).append(dtstart)
-        elif summary.startswith("Check-out:"):
-            hotel = summary[len("Check-out:") :].strip()
+        elif role == CHECK_OUT:
             checkouts.setdefault(hotel, []).append(dtstart)
     ranges = []
     for hotel, cis in checkins.items():
