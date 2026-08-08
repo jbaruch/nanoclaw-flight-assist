@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed — keep skill descriptions under the registry's limit, and catch it before merge
+
+The drive-engine description grew to 1118 characters in the change above; `tessl plugin lint` caps a `description` at 1024. That gate runs inside the publish workflow, which fires only after a merge to main, so the over-long value passed every pre-merge check and then turned main red with a failed publish (no version was published — lint fails ahead of it).
+
+Description trimmed to 1012 with its trigger phrases intact. `tests/test_plugin_manifest_limits.py` now checks the manifest's description and every declared skill's frontmatter description against the same ceiling in the ordinary suite, so the failure surfaces on the branch rather than after the merge. It also asserts each manifest-declared skill directory actually has a `SKILL.md`, which would otherwise make the description check silently vacuous.
+
 ### Added — drive-engine: the getting-there legs of a trip you drive to (#231)
 
 A trip booked with lodging and no flight fell through every net the engine has. The intra-trip drives worked — a hotel→event drive is an ordinary meeting leg whose origin `position_at` resolves to the hotel — but nothing planned the drive that gets the operator there, because the airport chain anchors on flights and a hotel check-in is not one. Nothing warned either: for a genuine drive trip a missing flight is normal, so `check-travel-bookings` counted the trip complete. Live case that surfaced it — TripIt "TN TIGERS VS Faith Christian School" (Gatlinburg, TN, Aug 14-15 2026): the hotel→game drive appeared on the calendar, the home→hotel drive never did, and no alert fired.
