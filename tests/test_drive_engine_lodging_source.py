@@ -435,3 +435,53 @@ def test_a_car_rental_does_not_disqualify_the_trip():
     assert [
         t.key for t in find_drive_trips(_schedule(rental), now=NOW, window=timedelta(days=30))
     ] == [TRIP_KEY]
+
+
+# ---------------------------------------------------------------------------
+# Orphan check-in — a stay TripIt wrote with no check-out record
+# ---------------------------------------------------------------------------
+
+
+def _orphan_schedule():
+    return [_trip_record(), _lodging("in", CHECK_IN)]
+
+
+def test_an_orphan_checkin_still_sees_its_local_drives():
+    """Bounding the window at the check-in instant made every local drive
+    invisible; the trip wrapper's end is the right outer bound."""
+    trips = find_drive_trips(_orphan_schedule(), now=NOW, window=timedelta(days=30))
+    assert trips[0].check_out is None
+
+    local = DesiredBlock(
+        identity="mtg1",
+        kind="meeting_outbound",
+        summary="Drive: Game",
+        start=CHECK_IN + timedelta(hours=2),
+        end=CHECK_IN + timedelta(hours=5),
+        origin=HOTEL_ADDRESS,
+        destination="Stadium",
+        baseline_seconds=3600,
+        anchor=CHECK_IN + timedelta(hours=4),
+        timezone="America/New_York",
+    )
+    ctx = context_from_blocks(trips, [local])[TRIP_KEY]
+    assert ctx.onward_start == local.start
+    assert ctx.trailing_end == local.end
+
+
+def test_an_orphan_checkin_still_gets_a_return_leg_from_its_trailing_drive():
+    """With no check-out to depart after, the last local drive is what the
+    drive home follows — dropping it stranded the operator at the hotel."""
+    trailing_end = CHECK_IN + timedelta(hours=5)
+    ctx = {TRIP_KEY: TripContext(trailing_end=trailing_end)}
+    blocks, _skipped, _plans = _plan(_orphan_schedule(), drive=timedelta(hours=2), contexts=ctx)
+    assert [b.kind for b in blocks] == [KIND_OUTBOUND, KIND_RETURN]
+    assert blocks[1].start == trailing_end
+
+
+def test_an_orphan_checkin_with_no_local_drives_plans_no_return():
+    """Nothing to anchor on: the trip wrapper's date-only midnight is a worse
+    departure time than none, so the leg is skipped with a diagnostic."""
+    blocks, skipped, _plans = _plan(_orphan_schedule(), drive=timedelta(hours=2))
+    assert [b.kind for b in blocks] == [KIND_OUTBOUND]
+    assert any("no check-out to depart after" in s for s in skipped)

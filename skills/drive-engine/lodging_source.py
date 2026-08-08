@@ -95,6 +95,9 @@ class DriveTrip:
         booking-gap check.
     address — the lodging's street address, the drive's far endpoint.
     check_in / check_out — the stay's own instants, the fallback anchors.
+        `check_out` is None for an orphan check-in, which TripIt does write.
+    span_end — the Trip wrapper's own end, the outer bound on "away at the
+        destination" when the stay has no check-out to supply one.
     expires — when a verdict about this trip stops applying.
     """
 
@@ -104,6 +107,7 @@ class DriveTrip:
     address: str
     check_in: datetime
     check_out: datetime | None
+    span_end: datetime
     expires: datetime
 
 
@@ -271,6 +275,7 @@ def find_drive_trips(
                 address=address,
                 check_in=check_in,
                 check_out=check_out,
+                span_end=end,
                 expires=(check_out or end) + VERDICT_GRACE,
             )
         )
@@ -318,13 +323,20 @@ def context_from_blocks(
     """Derive each trip's `TripContext` from the local drives already planned.
 
     A block counts toward a trip when its anchor falls between that trip's
-    check-in and check-out — the window during which the operator is at the
-    destination, so any drive anchored in it is a local one this trip's outer
-    legs must not overlap.
+    check-in and the end of its stay — the window during which the operator is
+    at the destination, so any drive anchored in it is a local one this trip's
+    outer legs must not overlap.
+
+    An orphan check-in (no check-out record, which TripIt does write) falls back
+    to the trip wrapper's own end rather than collapsing the window to the
+    check-in instant. Collapsing it made every local drive invisible: the
+    outbound ignored the onward drive it must land before, and the return leg
+    was dropped as having nothing to depart after even with trailing drives on
+    the calendar.
     """
     contexts: dict[str, TripContext] = {}
     for trip in trips:
-        window_end = trip.check_out or trip.check_in
+        window_end = trip.check_out or trip.span_end
         onward: datetime | None = None
         trailing: datetime | None = None
         zone: str | None = None

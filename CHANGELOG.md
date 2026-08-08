@@ -22,6 +22,8 @@ Lodging drives apply silently like airport drives, for the same reason — they 
 
 That reader is deliberately looser than the owner's own: a missing, unreadable, or unrecognized-version store yields no gap rather than raising. A non-owner reader's no-prior-state path must stay non-disruptive (`coding-policy: stateful-artifacts`), and inventing missing-flight alerts out of an unreadable file is the alert storm that rule exists to forbid — under-reporting a gap is recoverable, a storm of false ones is not.
 
+An orphan check-in — a stay TripIt wrote with no check-out record, which `build_lodging_ranges` already handles for coverage — bounds the "at the destination" window at the trip wrapper's end rather than at the check-in instant. Collapsing it to the instant made every local drive invisible: the outbound ignored the onward drive it must land before, and the return leg was dropped as having nothing to depart after even with trailing drives on the calendar. (Caught in review on #232.)
+
 Rail counts alongside Flight as booked transport, so a train trip with a hotel is not mistaken for a drive. Car Rental deliberately does not: renting a car is compatible with driving there.
 
 Surface sync: `drive-decisions.json` documented in `skills/drive-engine/state-schema.md` (owner, writer/reader contract, tolerance on both sides).
