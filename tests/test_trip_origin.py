@@ -515,3 +515,172 @@ def test_flight_summaries_includes_date_only_flight_segments():
         ),
     ]
     assert flight_summaries(schedule) == ["DL 4908 BNA to LHR"]
+
+
+# ---------------------------------------------------------------------------
+# When the trip begins — transport departure, check-in only as a fallback (#233)
+# ---------------------------------------------------------------------------
+
+
+def _flightless_trip_schedule() -> list[dict]:
+    """A drive-to-lodging trip: hotel booked, no transport segment at all."""
+    return [
+        _record(
+            type="Trip",
+            summary="TN Tigers 2025",
+            start="2025-08-14",
+            end="2025-08-16",
+            location="Gatlinburg, TN",
+        ),
+        _record(
+            type="Lodging",
+            summary="Check-in: Fairfield Inn",
+            start="2025-08-14T20:00:00Z",
+            end="2025-08-14T21:00:00Z",
+            location="611 Historic Nature Trail Gatlinburg TN",
+        ),
+    ]
+
+
+def test_flightless_trip_before_checkin_resolves_home():
+    """The gate used to key on a first FLIGHT, which a drive trip has none of,
+    so it never fired and a first-day anchor fell through to the Trip wrapper's
+    own location — the destination city. That is the cross-country-drive shape
+    the gate exists to prevent, reached by the other door (#233)."""
+    anchor = resolve_anchor(
+        _flightless_trip_schedule(), at=_at("2025-08-14T12:00:00Z"), home_address=HOME
+    )
+    assert anchor.address == HOME
+    assert anchor.source == "home"
+
+
+def test_flightless_trip_after_checkin_resolves_to_the_lodging():
+    """The other side of the gate: once checked in, the hotel wins. Gating the
+    trip must not strand the operator at home for its whole duration."""
+    anchor = resolve_anchor(
+        _flightless_trip_schedule(), at=_at("2025-08-14T23:00:00Z"), home_address=HOME
+    )
+    assert anchor.source == "lodging"
+    assert "Gatlinburg" in (anchor.address or "")
+
+
+def _airport_hotel_schedule() -> list[dict]:
+    """The #154 shape: an airport hotel the night before an early flight."""
+    return [
+        _record(
+            type="Trip",
+            summary="London 2025",
+            start="2025-09-01",
+            end="2025-09-05",
+            location="London, UK",
+        ),
+        _record(
+            type="Lodging",
+            summary="Check-in: Hyatt Place Nashville Airport",
+            start="2025-09-01T22:00:00Z",
+            end="2025-09-01T23:00:00Z",
+            location="Hyatt Place Nashville Airport",
+        ),
+        _record(
+            type="Flight",
+            summary="BNA to LHR",
+            start="2025-09-02T11:00:00Z",
+            end="2025-09-02T20:00:00Z",
+            location="Nashville International Airport",
+        ),
+    ]
+
+
+def test_a_trip_with_transport_still_begins_at_its_first_departure():
+    """The lodging signal is a FALLBACK, not an earliest-of. On a trip that has
+    transport, letting a pre-flight staging hotel begin it flips
+    `engine.build_reconcile_plan`'s homecoming test from `home` to `lodging` and
+    the round trip's drive home routes to that hotel instead of the house.
+
+    So the morning of the flight still reads home here. That is a known wrong
+    answer for this shape — the #154 airport-hotel case, tracked in #235 — and
+    pinning it keeps the narrow fix from silently widening into that regression.
+    """
+    anchor = resolve_anchor(
+        _airport_hotel_schedule(), at=_at("2025-09-02T09:00:00Z"), home_address=HOME
+    )
+    assert anchor.source == "home"
+
+
+def test_airport_hotel_trip_before_checkin_resolves_home():
+    """The drive TO that hotel starts at home; the gate holds before check-in."""
+    anchor = resolve_anchor(
+        _airport_hotel_schedule(), at=_at("2025-09-01T12:00:00Z"), home_address=HOME
+    )
+    assert anchor.address == HOME
+    assert anchor.source == "home"
+
+
+def test_a_rail_departure_begins_a_trip_like_a_flight_does():
+    """A train out is a departure from home too; before it the operator is home."""
+    schedule = [
+        _record(
+            type="Trip",
+            summary="Brussels 2025",
+            start="2025-10-01",
+            end="2025-10-03",
+            location="Brussels, Belgium",
+        ),
+        _record(
+            type="Rail",
+            summary="Eurostar 9145",
+            start="2025-10-01T14:00:00Z",
+            end="2025-10-01T16:00:00Z",
+            location="London St Pancras",
+        ),
+    ]
+    before = resolve_anchor(schedule, at=_at("2025-10-01T09:00:00Z"), home_address=HOME)
+    after = resolve_anchor(schedule, at=_at("2025-10-01T18:00:00Z"), home_address=HOME)
+    assert before.source == "home"
+    assert after.source == "trip_location"
+
+
+def test_a_blank_location_checkin_does_not_begin_the_trip():
+    """The lodging ladder cannot anchor on a blank location, so counting such a
+    check-in as the trip's start would step past the gate and land on the
+    destination city — the bug, not the fix."""
+    schedule = _flightless_trip_schedule()
+    schedule[1]["location"] = "   "
+    anchor = resolve_anchor(schedule, at=_at("2025-08-14T23:00:00Z"), home_address=HOME)
+    assert anchor.source == "trip_location"
+
+
+def test_a_checkout_record_does_not_begin_the_trip():
+    """Both sides of a stay are `Lodging`; only the check-in marks arrival."""
+    schedule = [
+        _record(
+            type="Trip",
+            summary="TN Tigers 2025",
+            start="2025-08-14",
+            end="2025-08-16",
+            location="Gatlinburg, TN",
+        ),
+        _record(
+            type="Lodging",
+            summary="Check-out: Fairfield Inn",
+            start="2025-08-16T15:00:00Z",
+            end="2025-08-16T16:00:00Z",
+            location="611 Historic Nature Trail Gatlinburg TN",
+        ),
+    ]
+    # With only a check-out there is no begin instant, so the gate cannot fire
+    # and the pre-existing flightless contract (trip location) stands.
+    anchor = resolve_anchor(schedule, at=_at("2025-08-14T12:00:00Z"), home_address=HOME)
+    assert anchor.source == "trip_location"
+
+
+def test_a_date_only_checkin_does_not_gate_the_trip_to_home():
+    """A date-only check-in carries no arrival time, so it cannot say when the
+    operator left home and never gates. The lodging ladder's own reading of it
+    (midnight, so the hotel wins from the start of that day) is unchanged — the
+    gate is what must not act on an invented instant, not the ladder."""
+    schedule = _flightless_trip_schedule()
+    schedule[1]["start"] = "2025-08-14"
+    schedule[1]["end"] = "2025-08-14"
+    anchor = resolve_anchor(schedule, at=_at("2025-08-14T12:00:00Z"), home_address=HOME)
+    assert anchor.source == "lodging"

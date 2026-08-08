@@ -63,6 +63,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+# Co-located in this bundle; import by module name so consumers that put the
+# bundle on sys.path (see SKILL.md) resolve it the same way they resolve this
+# module.
+_BUNDLE_DIR = Path(__file__).resolve().parent
+if str(_BUNDLE_DIR) not in sys.path:
+    sys.path.insert(0, str(_BUNDLE_DIR))
+
+from lodging import CHECK_IN, lodging_role  # noqa: E402
+
 SCHEDULE_PATH = "/workspace/group/travel-schedule.json"
 
 # Highest travel-schedule.json record schema this reader accepts. Bump in
@@ -193,40 +202,99 @@ def _active_trip(records: list[dict], on_day: date) -> dict | None:
     return active
 
 
-def _first_trip_flight_departure(
+# Record types whose departure marks the operator physically leaving for a
+# trip. Rail belongs beside Flight: a train out is a departure from home just as
+# much as a flight is.
+_DEPARTURE_TYPES = frozenset({"Flight", "Rail"})
+
+
+def _timed_within(record: dict, trip_start: date | None, trip_end: date | None) -> datetime | None:
+    """A record's `start` as a UTC instant, if it is TIMED and inside the span.
+
+    Timed only. A date-only `YYYY-MM-DD` start parses to midnight, which would
+    falsely mark the trip as already begun for the rest of that day and let a
+    same-day anchor fall through to the destination — the very bug the caller's
+    gate closes. Mirrors `flight_windows`.
+    """
+    raw_start = record.get("start")
+    if not (isinstance(raw_start, str) and "T" in raw_start):
+        return None
+    when = parse_schedule_time(raw_start)
+    if when is None:
+        return None
+    if trip_start is not None and trip_end is not None:
+        if not (trip_start <= when.date() <= trip_end):
+            return None
+    return when
+
+
+def _first_transport_departure(
     records: list[dict], trip_start: date | None, trip_end: date | None
 ) -> datetime | None:
-    """The earliest timed `Flight` departure within the trip's date span, else None.
+    """The earliest timed transport departure within the trip's span, else None."""
+    earliest: datetime | None = None
+    for record in records:
+        if record.get("type") not in _DEPARTURE_TYPES:
+            continue
+        when = _timed_within(record, trip_start, trip_end)
+        if when is not None and (earliest is None or when < earliest):
+            earliest = when
+    return earliest
 
-    Marks when the operator physically leaves for the trip. Before it the
-    date-only Trip wrapper is already "active", but the planned position is still
-    home — the operator has not flown out yet. A trip with no timed flight in the
-    feed yields None, so the caller leaves the pre-flight anchor as it was.
+
+def _first_lodging_arrival(
+    records: list[dict], trip_start: date | None, trip_end: date | None
+) -> datetime | None:
+    """The earliest timed lodging check-in within the trip's span, else None.
+
+    Only a check-in with a usable location counts — the lodging ladder can
+    anchor on nothing else, so treating a blank-location check-in as the trip's
+    start would step past the caller's gate and land on the destination city,
+    which is the shape the gate exists to prevent.
     """
     earliest: datetime | None = None
     for record in records:
-        if record.get("type") != "Flight":
+        if record.get("type") != "Lodging":
             continue
-        raw_start = record.get("start")
-        # Timed departures only. A date-only `YYYY-MM-DD` start parses to
-        # midnight, which would falsely mark the trip as already departed for
-        # the rest of that day and let a same-day pre-flight anchor fall through
-        # to the destination — the very bug this gate closes. Mirrors
-        # flight_windows; a date-only Flight leaves the anchor as it was.
-        if not (isinstance(raw_start, str) and "T" in raw_start):
+        if lodging_role(record.get("summary")) != CHECK_IN:
             continue
-        when = parse_schedule_time(raw_start)
-        if when is None:
+        location = record.get("location")
+        if not isinstance(location, str) or not location.strip():
             continue
-        if (
-            trip_start is not None
-            and trip_end is not None
-            and not (trip_start <= when.date() <= trip_end)
-        ):
-            continue
-        if earliest is None or when < earliest:
+        when = _timed_within(record, trip_start, trip_end)
+        if when is not None and (earliest is None or when < earliest):
             earliest = when
     return earliest
+
+
+def _trip_begins_at(
+    records: list[dict], trip_start: date | None, trip_end: date | None
+) -> datetime | None:
+    """When the operator physically leaves home for the trip, else None.
+
+    The trip's first timed transport departure when it has one, and otherwise
+    its first timed lodging check-in. Before that instant the date-only Trip
+    wrapper is already "active" but the planned position is still home.
+
+    The lodging fallback exists because keying on transport ALONE left a
+    flight-less drive trip with no begin instant at all: the gate never fired,
+    and a first-day anchor before check-in resolved to the Trip wrapper's own
+    `location` — the destination city, the exact cross-country-drive shape the
+    gate exists to prevent (#233).
+
+    The fallback is deliberately a FALLBACK rather than an earliest-of. On a
+    trip that does have transport, letting a pre-flight staging hotel begin the
+    trip flips `engine.build_reconcile_plan`'s homecoming test from `home` to
+    `lodging`, and the round trip's drive home then routes to that hotel instead
+    of the house. Widening it needs that call site fixed first (#235).
+
+    A trip with neither signal yields None and the caller leaves the anchor as
+    it was.
+    """
+    departure = _first_transport_departure(records, trip_start, trip_end)
+    if departure is not None:
+        return departure
+    return _first_lodging_arrival(records, trip_start, trip_end)
 
 
 def resolve_anchor(
@@ -265,17 +333,21 @@ def resolve_anchor(
     trip_start = _parse_day(trip.get("start"))
     trip_end = _parse_day(trip.get("end"))
 
-    # Before the trip's first flight departs the operator is still home — the
-    # date-only Trip wrapper is "active" on the departure day, but anchoring the
-    # outbound airport-departure drive at the destination draws a cross-country
-    # "drive" (the 34-hour San Francisco→BNA block for a BNA→SFO trip). Home
-    # wins until the first flight lifts off; a flightless trip skips this.
-    first_departure = _first_trip_flight_departure(schedule, trip_start, trip_end)
-    if first_departure is not None and at_utc < first_departure:
+    # Before the trip begins the operator is still home — the date-only Trip
+    # wrapper is "active" on the first day, but anchoring an outbound drive at
+    # the destination draws a cross-country "drive" (the 34-hour San
+    # Francisco→BNA block for a BNA→SFO trip). "Begins" is the first transport
+    # departure, falling back to the first lodging check-in when the trip has
+    # none, so a flight-less drive trip is gated too (`_trip_begins_at`, #233).
+    # Transport still wins whenever it exists: a pre-flight staging hotel does
+    # NOT begin the trip, and the morning of an early flight still reads home
+    # (#235).
+    begins_at = _trip_begins_at(schedule, trip_start, trip_end)
+    if begins_at is not None and at_utc < begins_at:
         return TripAnchor(
             address=home_address,
             source="home",
-            detail="before the trip's first flight departs",
+            detail="before the trip begins",
         )
 
     best = None
