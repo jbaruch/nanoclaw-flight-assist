@@ -16,7 +16,6 @@ Alerts on transport (Flight or Rail) + Lodging gaps; all item types are in the D
 """
 
 import json
-import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 
@@ -41,12 +40,6 @@ def _schema_compatible(value) -> bool:
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
-
-
-def make_slug(summary: str, start: date) -> str:
-    clean = re.sub(r"\s+\d{4}$", "", summary.strip())
-    slug_base = re.sub(r"[^a-z0-9]+", "-", clean.lower()).strip("-")
-    return f"{slug_base}-{start.year}-{start.month:02d}"
 
 
 def build_lodging_ranges(lodging_items: list[dict]) -> list[tuple]:

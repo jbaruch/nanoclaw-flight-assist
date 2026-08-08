@@ -21,6 +21,8 @@ Locks down the documented contract per `coding-policy: testing-standards`:
         nights of a trip already underway are never flagged (#120)
   - `build_lodging_ranges` pairs `Check-in:` / `Check-out:` events by
     hotel name; an orphan check-in defaults to a 1-day stay
+    (the trip slug itself is `travel-core`'s `trip_key`, covered by
+    `tests/test_trip_key.py`)
   - Issue derivation prioritizes empty > transport-without-lodging >
     transport-with-uncovered-nights; trips with all checks passing
     increment `complete_trips` and emit nothing
@@ -113,14 +115,6 @@ def _run(module, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
-
-
-def test_make_slug_format(check_travel_bookings):
-    """`make_slug` lowercases + dashifies + strips trailing year +
-    appends YYYY-MM."""
-    module, *_ = check_travel_bookings
-    slug = module.make_slug("Madrid Tech Days 2026", date(2026, 6, 15))
-    assert slug == "madrid-tech-days-2026-06"
 
 
 def test_build_lodging_ranges_pairs_by_hotel(check_travel_bookings):
