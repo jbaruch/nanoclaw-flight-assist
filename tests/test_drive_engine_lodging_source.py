@@ -420,3 +420,18 @@ def test_both_legs_carry_the_trip_key_as_identity():
     blocks, _skipped, _plans = _plan(drive=timedelta(hours=2))
     assert {b.identity for b in blocks} == {TRIP_KEY}
     assert len({b.kind for b in blocks}) == 2
+
+
+def test_a_timed_rail_segment_disqualifies_the_trip_too():
+    """A train to the destination is not a drive; planning one would double up
+    on a journey already booked."""
+    rail = {"type": "Rail", "summary": "Amtrak 20", "start": "2020-08-14T10:00:00Z"}
+    assert find_drive_trips(_schedule(rail), now=NOW, window=timedelta(days=30)) == []
+
+
+def test_a_car_rental_does_not_disqualify_the_trip():
+    """Renting a car is compatible with driving there, not evidence against it."""
+    rental = {"type": "Car Rental", "summary": "Hertz", "start": "2020-08-14T21:00:00Z"}
+    assert [
+        t.key for t in find_drive_trips(_schedule(rental), now=NOW, window=timedelta(days=30))
+    ] == [TRIP_KEY]

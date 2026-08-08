@@ -18,7 +18,13 @@ The 3h ceiling is deliberately NOT shared with `meeting_source.DEFAULT_MAX_REASO
 
 Lodging drives apply silently like airport drives, for the same reason — they are not skippable. The drive-or-fly question is a third wake reason beside a new meeting drive and a material re-time. The operator answers via `answer_drive_or_fly.py` (SKILL.md Step 3), which resolves the trip by the name the question used and records `drive` or `fly`.
 
-Surface sync: `drive-decisions.json` documented in `skills/drive-engine/state-schema.md` (owner, writer/reader contract, and the deliberately looser tolerance for the cross-skill reader — an unreadable file must yield no gap, never an invented one).
+`check-travel-bookings` reports the other half: a new `отель есть, рейса нет` gap, the mirror of `рейсы есть, отеля нет`. Per the owner's call it lives with the rest of the booking-gap alerts rather than in the sweep, so it reads the verdict rather than computing a drive time it has no router for. It is gated on a `fly` verdict rather than on missing transport alone — a trip the operator drives to has no transport booking by design, and alerting on that would nag about every weekend away. `drive` and `unknown` are not gaps: the first means the drive is planned, the second that the operator has been asked and has not answered.
+
+That reader is deliberately looser than the owner's own: a missing, unreadable, or unrecognized-version store yields no gap rather than raising. A non-owner reader's no-prior-state path must stay non-disruptive (`coding-policy: stateful-artifacts`), and inventing missing-flight alerts out of an unreadable file is the alert storm that rule exists to forbid — under-reporting a gap is recoverable, a storm of false ones is not.
+
+Rail counts alongside Flight as booked transport, so a train trip with a hotel is not mistaken for a drive. Car Rental deliberately does not: renting a car is compatible with driving there.
+
+Surface sync: `drive-decisions.json` documented in `skills/drive-engine/state-schema.md` (owner, writer/reader contract, tolerance on both sides).
 
 ### Changed — travel-core: host the trip key and the lodging-role discriminator
 

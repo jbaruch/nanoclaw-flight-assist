@@ -16,6 +16,7 @@ Alerts on transport (Flight or Rail) + Lodging gaps; all item types are in the D
 """
 
 import json
+import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +36,19 @@ from lodging import CHECK_IN, CHECK_OUT, hotel_name, lodging_role  # noqa: E402
 DB_PATH = "/workspace/group/travel-db.json"
 STATE_PATH = "/workspace/group/travel-booking-state.json"
 
+# drive-engine's drive-or-fly verdict store, read here READ-ONLY and
+# non-migrating. Owner and full contract: `skills/drive-engine/drive_decision.py`
+# + `skills/drive-engine/state-schema.md`. The directory keeps the historical
+# `drive-planner` name and its env override so both skills resolve one path.
+DRIVE_DECISIONS_DIR_ENV = "DRIVE_PLANNER_STATE_DIR"
+DRIVE_DECISIONS_DEFAULT_DIR = "/workspace/state/drive-planner"
+DRIVE_DECISIONS_FILE = "drive-decisions.json"
+DRIVE_DECISIONS_SCHEMA_VERSION = 1
+
+# The verdict that makes a flight-less trip a booking gap: the operator is
+# flying (or the drive is too long to be one) and no flight is booked.
+VERDICT_FLY = "fly"
+
 # Bump in lock-step with build-travel-db.py per
 # `coding-policy: stateful-artifacts` + state-schema.md sibling file.
 # Legacy data lacking schema_version is treated as implicit v1 (the
@@ -53,6 +67,46 @@ def _schema_compatible(value) -> bool:
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
+
+
+def load_flying_trips(path: Path | None = None) -> set:
+    """Trip slugs the drive engine has settled as flights, per its verdict store.
+
+    A READ-ONLY, non-migrating consumer of another skill's artifact
+    (`coding-policy: stateful-artifacts`). Deliberately looser than the owner's
+    own reader: a missing, unreadable, non-object, or unrecognized-version file
+    yields an EMPTY set, never an exception. The no-prior-state path has to stay
+    non-disruptive, and inventing missing-flight alerts out of an unreadable
+    file is exactly the alert storm that rule forbids — under-reporting a gap is
+    recoverable, a storm of false ones is not.
+
+    Only `fly` verdicts are returned. `drive` means the engine is planning the
+    drive and no flight is expected; `unknown` means it has asked the operator
+    and is waiting, which is not yet a gap.
+    """
+    target = (
+        path
+        or Path(os.environ.get(DRIVE_DECISIONS_DIR_ENV, DRIVE_DECISIONS_DEFAULT_DIR))
+        / DRIVE_DECISIONS_FILE
+    )
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    if payload.get("schema_version") != DRIVE_DECISIONS_SCHEMA_VERSION:
+        return set()
+    trips = payload.get("trips")
+    if not isinstance(trips, dict):
+        return set()
+    return {
+        slug
+        for slug, record in trips.items()
+        if isinstance(slug, str)
+        and isinstance(record, dict)
+        and record.get("verdict") == VERDICT_FLY
+    }
 
 
 def build_lodging_ranges(lodging_items: list[dict]) -> list[tuple]:
@@ -342,6 +396,10 @@ def main():
     if not isinstance(snooze_state, dict):
         snooze_state = {}
 
+    # Which flight-less trips the drive engine settled as flights (#231). Empty
+    # when the store is absent or unreadable — see `load_flying_trips`.
+    flying_trips = load_flying_trips()
+
     gaps = []
     complete_trips = 0
 
@@ -390,6 +448,17 @@ def main():
             issue = "рейсы есть, отеля нет"
         elif classification["has_transport"] and uncovered:
             issue = f"нет отеля на {len(uncovered)} ноч.: {uncovered[0]}…{uncovered[-1]}"
+        elif (
+            not classification["has_transport"]
+            and classification["has_lodging"]
+            and slug in flying_trips
+        ):
+            # The mirror of "рейсы есть, отеля нет": hotel booked, nothing to
+            # get there on. Gated on the drive engine's verdict rather than on
+            # the missing transport alone, because a trip the operator drives to
+            # has no transport booking by design and alerting on it would nag
+            # about every weekend away (#231).
+            issue = "отель есть, рейса нет"
 
         if issue is None:
             complete_trips += 1

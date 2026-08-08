@@ -77,6 +77,12 @@ DRIVE_IMPLAUSIBLE_MIN = timedelta(hours=7)
 # a trip still under way is not pruned out from under the return leg.
 VERDICT_GRACE = timedelta(days=2)
 
+# Record types that mean the journey to the destination is already booked, so
+# it is not a drive. Mirrors `check-travel-bookings.classify_trip`'s
+# has_transport (Flight or Rail); Car Rental is deliberately absent — renting
+# a car is compatible with driving there, not evidence against it.
+_TRANSPORT_TYPES = frozenset({"Flight", "Rail"})
+
 KIND_OUTBOUND = "lodging_outbound"
 KIND_RETURN = "lodging_return"
 
@@ -157,17 +163,22 @@ def _in_span(when: datetime, span: tuple[datetime, datetime]) -> bool:
     return start.date() <= when.date() <= end.date()
 
 
-def _has_flight(schedule: list[dict], span: tuple[datetime, datetime]) -> bool:
-    """Whether any TIMED flight segment falls inside the trip's span.
+def _has_booked_transport(schedule: list[dict], span: tuple[datetime, datetime]) -> bool:
+    """Whether any TIMED transport segment falls inside the trip's span.
 
-    Date-only Flight records are ignored for the same reason
+    Rail counts alongside Flight: a train to the destination is not a drive
+    either, and planning a home→hotel drive around one would double up on a
+    journey already booked. `check-travel-bookings` draws the same Flight-or-
+    Rail line for its transport gap.
+
+    Date-only records are ignored for the reason
     `trip_origin._first_trip_flight_departure` ignores them: a bare
     `YYYY-MM-DD` cannot say when the operator actually leaves, and treating one
-    as a flight would silently suppress the getting-there legs of a trip whose
-    flight the feed never timed.
+    as booked transport would silently suppress the getting-there legs of a
+    trip whose segment the feed never timed.
     """
     for record in schedule:
-        if not isinstance(record, dict) or record.get("type") != "Flight":
+        if not isinstance(record, dict) or record.get("type") not in _TRANSPORT_TYPES:
             continue
         raw = record.get("start")
         if not (isinstance(raw, str) and "T" in raw):
@@ -243,7 +254,7 @@ def find_drive_trips(
         start, end = span
         if end.date() < now.date() or start > horizon:
             continue
-        if _has_flight(schedule, span):
+        if _has_booked_transport(schedule, span):
             continue
         stay = _stay_in_span(schedule, span)
         if stay is None:
