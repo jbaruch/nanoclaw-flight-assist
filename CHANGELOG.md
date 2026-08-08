@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.90 — 2026-08-08
+
 ### Fixed — an airport hotel the night before no longer routes the morning drive from the house (#235)
 
 Stage at an airport hotel before an early flight and the morning drive to the terminal started from the house you had already left. The pre-departure gate keyed on the trip's first *transport* departure, so every instant before wheels-up read as home — the #154 shape, reintroduced by the gate added later for the San Francisco→BNA block.
