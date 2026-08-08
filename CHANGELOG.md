@@ -1,5 +1,15 @@
 # Changelog
 
+### Fixed — travel-core: a flight-less trip's pre-check-in anchor resolved to the destination city (#233)
+
+`resolve_anchor`'s pre-departure gate keeps the operator anchored at home until they have physically left — without it, a date-only Trip wrapper is already "active" on the first day and an outbound drive anchors at the destination, which is what drew the 34-hour San Francisco→BNA block. The gate keyed on the trip's first *flight*, and its own comment said what that left open: *"a flightless trip skips this."*
+
+So on a drive trip, an instant on the first day before check-in found no lodging at-or-before it and fell through to the Trip wrapper's `location` — the destination city. A meeting that morning routed Gatlinburg→meeting instead of home→meeting: wrong duration, wrong leave-by. The same cross-country shape the gate exists to prevent, reached by the other door.
+
+The gate now falls back to the trip's first timed lodging check-in when it has no timed transport departure. Rail counts beside Flight on the transport side — a train out is a departure from home too. A check-in only counts with a usable location, since the lodging ladder can anchor on nothing else and a blank one would step past the gate onto the destination city again; a date-only check-in never gates, for the same midnight-parse reason the transport side already ignores date-only records.
+
+Deliberately a fallback rather than an earliest-of. On a trip that *does* have transport, letting a pre-flight staging hotel begin it flips `engine.build_reconcile_plan`'s homecoming test from `home` to `lodging`, and the round trip's drive home then routes to that hotel instead of the house — strictly worse than the bug it would fix. That case (an airport hotel the night before an early flight, the #154 shape) is tracked in #235, and a test pins the current answer so this fix cannot silently widen into that regression.
+
 ## 0.2.88 — 2026-08-08
 
 ### Fixed — keep skill descriptions under the registry's limit, and catch it before merge

@@ -175,11 +175,10 @@ def _has_booked_transport(schedule: list[dict], span: tuple[datetime, datetime])
     journey already booked. `check-travel-bookings` draws the same Flight-or-
     Rail line for its transport gap.
 
-    Date-only records are ignored for the reason
-    `trip_origin._first_trip_flight_departure` ignores them: a bare
-    `YYYY-MM-DD` cannot say when the operator actually leaves, and treating one
-    as booked transport would silently suppress the getting-there legs of a
-    trip whose segment the feed never timed.
+    Date-only records are ignored for the reason `trip_origin._timed_within`
+    ignores them: a bare `YYYY-MM-DD` cannot say when the operator actually
+    leaves, and treating one as booked transport would silently suppress the
+    getting-there legs of a trip whose segment the feed never timed.
     """
     for record in schedule:
         if not isinstance(record, dict) or record.get("type") not in _TRANSPORT_TYPES:
