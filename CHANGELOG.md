@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.89 — 2026-08-08
+
 ### Fixed — travel-core: a flight-less trip's pre-check-in anchor resolved to the destination city (#233)
 
 `resolve_anchor`'s pre-departure gate keeps the operator anchored at home until they have physically left — without it, a date-only Trip wrapper is already "active" on the first day and an outbound drive anchors at the destination, which is what drew the 34-hour San Francisco→BNA block. The gate keyed on the trip's first *flight*, and its own comment said what that left open: *"a flightless trip skips this."*
