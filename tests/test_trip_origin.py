@@ -38,6 +38,7 @@ from trip_origin import (  # noqa: E402
     flight_summaries,
     flight_windows,
     load_travel_schedule,
+    opened_from_home,
     resolve_anchor,
     resolve_effective_home,
 )
@@ -591,20 +592,23 @@ def _airport_hotel_schedule() -> list[dict]:
     ]
 
 
-def test_a_trip_with_transport_still_begins_at_its_first_departure():
-    """The lodging signal is a FALLBACK, not an earliest-of. On a trip that has
-    transport, letting a pre-flight staging hotel begin it flips
-    `engine.build_reconcile_plan`'s homecoming test from `home` to `lodging` and
-    the round trip's drive home routes to that hotel instead of the house.
+def test_airport_hotel_the_night_before_wins_over_home_on_the_flight_morning():
+    """He slept at the hotel, so the morning airport drive starts there.
 
-    So the morning of the flight still reads home here. That is a known wrong
-    answer for this shape — the #154 airport-hotel case, tracked in #235 — and
-    pinning it keeps the narrow fix from silently widening into that regression.
+    Keying the gate on the first TRANSPORT departure read every instant before
+    wheels-up as home, routing that drive from the house he had already left —
+    the #154 shape reintroduced by the gate itself (#235). Earliest-of fixes it:
+    the check-in came first, so the trip had already begun.
+
+    The homecoming test that used to break when this changed now asks its own
+    question (`opened_from_home`), so widening the gate no longer sends the
+    drive home to this hotel.
     """
     anchor = resolve_anchor(
         _airport_hotel_schedule(), at=_at("2025-09-02T09:00:00Z"), home_address=HOME
     )
-    assert anchor.source == "home"
+    assert anchor.source == "lodging"
+    assert anchor.address == "Hyatt Place Nashville Airport"
 
 
 def test_airport_hotel_trip_before_checkin_resolves_home():
@@ -684,3 +688,148 @@ def test_a_date_only_checkin_does_not_gate_the_trip_to_home():
     schedule[1]["end"] = "2025-08-14"
     anchor = resolve_anchor(schedule, at=_at("2025-08-14T12:00:00Z"), home_address=HOME)
     assert anchor.source == "lodging"
+
+
+# ---------------------------------------------------------------------------
+# opened_from_home — "did the JOURNEY leave home", not "is he in the house"
+# ---------------------------------------------------------------------------
+
+
+def _mid_trip_round_trip_schedule() -> list[dict]:
+    """A long stay abroad with a round trip flown out of the destination.
+
+    The Athens hop returns to the Tel Aviv hotel, not across an ocean — the case
+    that keeps `opened_from_home` from simply answering yes to every round trip.
+    """
+    return [
+        _record(
+            type="Trip",
+            summary="Israel 2025",
+            start="2025-08-01",
+            end="2025-08-10",
+            location="Tel Aviv, Israel",
+        ),
+        _record(
+            type="Flight",
+            summary="BNA to TLV",
+            start="2025-08-01T12:00:00Z",
+            end="2025-08-02T08:00:00Z",
+            location="Nashville International Airport",
+        ),
+        _record(
+            type="Lodging",
+            summary="Check-in: Hotel Tel Aviv",
+            start="2025-08-02T13:00:00Z",
+            end="2025-08-02T14:00:00Z",
+            location="Rothschild Blvd, Tel Aviv",
+        ),
+        _record(
+            type="Flight",
+            summary="TLV to ATH",
+            start="2025-08-05T09:00:00Z",
+            end="2025-08-05T11:00:00Z",
+            location="Ben Gurion Airport",
+        ),
+    ]
+
+
+def test_a_journey_leaving_the_house_opened_from_home():
+    assert opened_from_home(_uk_trip_schedule(), at=_at("2025-06-26T17:00:00Z"), home_address=HOME)
+
+
+def test_a_journey_staged_at_an_airport_hotel_still_opened_from_home():
+    """The whole point: he is at a hotel, but he got there FROM the house, so
+    the round trip still closes at the house. The old proxy said no here and
+    routed the drive home to the hotel (#235)."""
+    assert opened_from_home(
+        _airport_hotel_schedule(), at=_at("2025-09-02T09:00:00Z"), home_address=HOME
+    )
+
+
+def test_a_round_trip_flown_mid_stay_did_not_open_from_home():
+    """Its departure is not the trip's first, so it returns to the Tel Aviv
+    hotel. Answering yes here would drive the operator to Tennessee."""
+    assert not opened_from_home(
+        _mid_trip_round_trip_schedule(), at=_at("2025-08-05T07:00:00Z"), home_address=HOME
+    )
+
+
+def test_the_outbound_of_that_same_trip_did_open_from_home():
+    """The discriminator is which departure, not which trip — the BNA leg of the
+    very schedule above still opens at home."""
+    assert opened_from_home(
+        _mid_trip_round_trip_schedule(), at=_at("2025-08-01T10:00:00Z"), home_address=HOME
+    )
+
+
+def test_no_home_address_configured_is_never_a_homecoming():
+    """There is nothing to route the drive home to."""
+    assert not opened_from_home(
+        _uk_trip_schedule(), at=_at("2025-06-26T17:00:00Z"), home_address=None
+    )
+
+
+def test_an_off_trip_departure_opened_from_home():
+    """A flight TripIt never ingested has no Trip wrapper; the planned position
+    is the house, which is answer enough."""
+    assert opened_from_home([], at=_at("2025-06-26T17:00:00Z"), home_address=HOME)
+
+
+def _drove_there_then_local_round_trip_schedule() -> list[dict]:
+    """Drove to Gatlinburg, checked in, then flies a local round trip days later.
+
+    Its first transport departure IS that round trip, so "is this the trip's
+    first departure" alone would call it home-originating and route the drive
+    off the final landing to Tennessee. The check-in's lead time is what says
+    otherwise: he has been living at the destination for days.
+    """
+    return [
+        _record(
+            type="Trip",
+            summary="Gatlinburg 2025",
+            start="2025-07-10",
+            end="2025-07-16",
+            location="Gatlinburg, TN",
+        ),
+        _record(
+            type="Lodging",
+            summary="Check-in: Fairfield Inn",
+            start="2025-07-10T20:00:00Z",
+            end="2025-07-10T21:00:00Z",
+            location="611 Historic Nature Trail Gatlinburg TN",
+        ),
+        _record(
+            type="Flight",
+            summary="TYS to ATL",
+            start="2025-07-13T09:00:00Z",
+            end="2025-07-13T10:00:00Z",
+            location="McGhee Tyson Airport",
+        ),
+        _record(
+            type="Flight",
+            summary="ATL to TYS",
+            start="2025-07-15T18:00:00Z",
+            end="2025-07-15T19:00:00Z",
+            location="Hartsfield-Jackson",
+        ),
+    ]
+
+
+def test_a_trip_driven_to_then_flown_out_of_did_not_open_from_home():
+    """He drove there days earlier; the round trip returns to the hotel, not to
+    Tennessee. Both this helper and the proxy it replaced answered yes here —
+    the lead-time separator is what fixes it."""
+    assert not opened_from_home(
+        _drove_there_then_local_round_trip_schedule(),
+        at=_at("2025-07-13T08:00:00Z"),
+        home_address=HOME,
+    )
+
+
+def test_the_staging_separator_is_the_check_ins_lead_time():
+    """Same schedule, check-in pulled to the night before the flight: now it is
+    an overnight stay he drove to from the house, so the trip opens at home."""
+    schedule = _drove_there_then_local_round_trip_schedule()
+    schedule[1]["start"] = "2025-07-12T22:00:00Z"
+    schedule[1]["end"] = "2025-07-12T23:00:00Z"
+    assert opened_from_home(schedule, at=_at("2025-07-13T08:00:00Z"), home_address=HOME)

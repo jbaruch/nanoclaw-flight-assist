@@ -1,5 +1,19 @@
 # Changelog
 
+### Fixed — an airport hotel the night before no longer routes the morning drive from the house (#235)
+
+Stage at an airport hotel before an early flight and the morning drive to the terminal started from the house you had already left. The pre-departure gate keyed on the trip's first *transport* departure, so every instant before wheels-up read as home — the #154 shape, reintroduced by the gate added later for the San Francisco→BNA block.
+
+`_trip_begins_at` is now the earliest of the first transport departure and the first lodging check-in, so the check-in begins the trip and the morning anchors at the hotel.
+
+That change alone was not shippable, which is why #233 left it. `engine.build_reconcile_plan` decided which final arrival closes a round trip by asking `position_at(opening_anchor).source == "home"` — a proxy for "did this journey leave home" that only agrees with it until the operator stages somewhere. Widen the gate and the proxy reads `lodging`, `return_home` goes false, and the drive off the final landing routes to the airport hotel instead of the house. Strictly worse than the bug being fixed.
+
+So the proxy is gone. New `trip_origin.opened_from_home` asks the question directly: the journey left home when the planned position IS home, or when this departure is the trip's own first transport departure — in which case any lodging resolving there is a staging stay reached from the house. A later flight inside a trip already under way is not an opening, so a round trip flown out of a foreign city during a long stay still returns to that city's hotel rather than across an ocean.
+
+A trip the operator DRIVES to and then flies a local round trip out of would otherwise read as opened-from-home too, since its first transport departure IS that flight — and the drive off the final landing would cross a state to the house. `STAGING_STAY_MAX_LEAD` separates the two: a check-in within a day of the first departure is an overnight staging stay, while one further back means he has been living at the destination. Without geography the lead time is the available signal, and the two shapes are hours apart versus days apart.
+
+(That case was wrong before this change too — the old proxy also returned home-originating for it, verified against `main` — so it is a fix here rather than a regression avoided.)
+
 ## 0.2.89 — 2026-08-08
 
 ### Fixed — travel-core: a flight-less trip's pre-check-in anchor resolved to the destination city (#233)

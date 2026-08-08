@@ -36,7 +36,7 @@ from chain import LegKind, PlannedLeg, plan_chain_legs
 from chain_builder import build_pair_contexts, group_into_chains, group_into_itineraries
 from flight_identity import Flight, MergedFlight, merge_flights
 from leg_anchor import AirportFacts, BufferOverrides, ConcreteLeg, resolve_leg_anchor
-from position import position_at, resolve_leg_origin
+from position import opened_from_home, position_at, resolve_leg_origin
 from reconcile import (
     DesiredBlock,
     ParsedBlock,
@@ -303,8 +303,10 @@ def build_reconcile_plan(
         )
         opening_anchor = opening_leg.anchor
         assert opening_anchor is not None
-        opening = position_at(schedule, opening_anchor, home_address=home_address)
-        if opening.source == "home" and opening.address is not None:
+        # Ask whether the JOURNEY left home, not whether the operator happened to
+        # be standing in the house at that instant — those come apart when he
+        # stages at an airport hotel the night before (#235, `opened_from_home`).
+        if opened_from_home(schedule, at=opening_anchor, home_address=home_address):
             homecoming_flights.add(last)
 
     desired: list[DesiredBlock] = []
