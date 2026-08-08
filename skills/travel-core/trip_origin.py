@@ -60,7 +60,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Co-located in this bundle; import by module name so consumers that put the
@@ -206,6 +206,17 @@ def _active_trip(records: list[dict], on_day: date) -> dict | None:
 # trip. Rail belongs beside Flight: a train out is a departure from home just as
 # much as a flight is.
 _DEPARTURE_TYPES = frozenset({"Flight", "Rail"})
+
+# How far in front of a trip's first transport departure a lodging check-in can
+# sit and still be a STAGING stay — an airport hotel the operator drove to from
+# home the night before, so the journey still opened at the house.
+#
+# The separator `opened_from_home` needs is staging-vs-destination, and without
+# geography the lead time is the signal there is: an overnight before an early
+# flight runs hours, while a stay the operator drove to and later flew a local
+# round trip out of runs days. A day covers the overnight case with room for a
+# long check-in-to-departure gap, and is well short of any destination stay.
+STAGING_STAY_MAX_LEAD = timedelta(hours=24)
 
 
 def _timed_within(record: dict, trip_start: date | None, trip_end: date | None) -> datetime | None:
@@ -489,10 +500,10 @@ def opened_from_home(
     round trip flown out of a foreign city during a long stay returns to that
     city's hotel, not across an ocean.
 
-    Known limitation, unchanged from the proxy it replaces: a trip the operator
-    DRIVES to and then flies a round trip out of also reads as opened-from-home,
-    because its first transport departure is that flight. Telling a staging stay
-    from a destination stay needs geography this module does not have.
+    A lodging check-in only reads as staging when it sits within
+    `STAGING_STAY_MAX_LEAD` of that departure. Further back and the operator has
+    been living at the destination — he drove there, and a round trip he later
+    flies out of is local, returning to the destination rather than the house.
 
     Returns False when no home address is configured — there is nothing to route
     a homecoming to.
@@ -507,10 +518,15 @@ def opened_from_home(
     trip = _active_trip(schedule, at.astimezone(timezone.utc).date())
     if trip is None:
         return False
-    first_departure = _first_transport_departure(
-        schedule, _parse_day(trip.get("start")), _parse_day(trip.get("end"))
-    )
-    return first_departure is not None and at <= first_departure
+    trip_start = _parse_day(trip.get("start"))
+    trip_end = _parse_day(trip.get("end"))
+    first_departure = _first_transport_departure(schedule, trip_start, trip_end)
+    if first_departure is None or at > first_departure:
+        return False
+    begins_at = _trip_begins_at(schedule, trip_start, trip_end)
+    if begins_at is not None and begins_at < first_departure - STAGING_STAY_MAX_LEAD:
+        return False
+    return True
 
 
 def resolve_effective_home(home_address: str | None, *, now: datetime) -> str | None:

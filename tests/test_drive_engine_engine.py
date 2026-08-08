@@ -547,3 +547,52 @@ def test_the_staged_outbound_drive_starts_at_the_hotel_not_the_house():
     )
     departures = [c.desired for c in result.plan.creates if c.desired.kind == "airport_departure"]
     assert departures[0].origin == "Hyatt Place Nashville Airport"
+
+
+def test_a_trip_driven_to_then_flown_out_of_does_not_drive_home_to_tennessee():
+    """The outcome the unit test implies: he drove to Gatlinburg days earlier,
+    so the local round trip lands back at the destination hotel. Routing that
+    final drive to the house would be a cross-state block (#235 review)."""
+    schedule = [
+        {
+            "type": "Trip",
+            "summary": "Gatlinburg",
+            "start": "2020-07-08",
+            "end": "2020-07-16",
+            "location": "Gatlinburg, TN",
+        },
+        {
+            "type": "Lodging",
+            "summary": "Check-in: Fairfield Inn",
+            "start": "2020-07-08T20:00:00Z",
+            "end": "2020-07-08T21:00:00Z",
+            "location": "611 Historic Nature Trail Gatlinburg TN",
+        },
+        {
+            "type": "Flight",
+            "summary": "BNA to SFO",
+            "start": "2020-07-12T09:00:00Z",
+            "end": "2020-07-12T14:00:00Z",
+        },
+        {
+            "type": "Flight",
+            "summary": "SFO to BNA",
+            "start": "2020-07-14T18:00:00Z",
+            "end": "2020-07-14T22:00:00Z",
+        },
+    ]
+    result = build_reconcile_plan(
+        flights=[
+            flight("BNA", "SFO", _dt(9), _dt(14), fid=1, trip_id=901),
+            flight("SFO", "BNA", _dt(18, day=14), _dt(22, day=14), fid=2, trip_id=901),
+        ],
+        airport_info=_us_info("BNA", "SFO"),
+        current_blocks=[],
+        route=const_route(30),
+        schedule=schedule,
+        home_address=HOME,
+        now=NOW,
+    )
+    arrivals = [c.desired for c in result.plan.creates if c.desired.kind == "airport_arrival"]
+    assert arrivals[-1].destination != HOME
+    assert "Gatlinburg" in arrivals[-1].destination

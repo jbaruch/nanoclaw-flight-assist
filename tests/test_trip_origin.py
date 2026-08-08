@@ -773,3 +773,63 @@ def test_an_off_trip_departure_opened_from_home():
     """A flight TripIt never ingested has no Trip wrapper; the planned position
     is the house, which is answer enough."""
     assert opened_from_home([], at=_at("2025-06-26T17:00:00Z"), home_address=HOME)
+
+
+def _drove_there_then_local_round_trip_schedule() -> list[dict]:
+    """Drove to Gatlinburg, checked in, then flies a local round trip days later.
+
+    Its first transport departure IS that round trip, so "is this the trip's
+    first departure" alone would call it home-originating and route the drive
+    off the final landing to Tennessee. The check-in's lead time is what says
+    otherwise: he has been living at the destination for days.
+    """
+    return [
+        _record(
+            type="Trip",
+            summary="Gatlinburg 2025",
+            start="2025-07-10",
+            end="2025-07-16",
+            location="Gatlinburg, TN",
+        ),
+        _record(
+            type="Lodging",
+            summary="Check-in: Fairfield Inn",
+            start="2025-07-10T20:00:00Z",
+            end="2025-07-10T21:00:00Z",
+            location="611 Historic Nature Trail Gatlinburg TN",
+        ),
+        _record(
+            type="Flight",
+            summary="TYS to ATL",
+            start="2025-07-13T09:00:00Z",
+            end="2025-07-13T10:00:00Z",
+            location="McGhee Tyson Airport",
+        ),
+        _record(
+            type="Flight",
+            summary="ATL to TYS",
+            start="2025-07-15T18:00:00Z",
+            end="2025-07-15T19:00:00Z",
+            location="Hartsfield-Jackson",
+        ),
+    ]
+
+
+def test_a_trip_driven_to_then_flown_out_of_did_not_open_from_home():
+    """He drove there days earlier; the round trip returns to the hotel, not to
+    Tennessee. Both this helper and the proxy it replaced answered yes here —
+    the lead-time separator is what fixes it."""
+    assert not opened_from_home(
+        _drove_there_then_local_round_trip_schedule(),
+        at=_at("2025-07-13T08:00:00Z"),
+        home_address=HOME,
+    )
+
+
+def test_the_staging_separator_is_the_check_ins_lead_time():
+    """Same schedule, check-in pulled to the night before the flight: now it is
+    an overnight stay he drove to from the house, so the trip opens at home."""
+    schedule = _drove_there_then_local_round_trip_schedule()
+    schedule[1]["start"] = "2025-07-12T22:00:00Z"
+    schedule[1]["end"] = "2025-07-12T23:00:00Z"
+    assert opened_from_home(schedule, at=_at("2025-07-13T08:00:00Z"), home_address=HOME)
