@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.88 — 2026-08-08
+
 ### Fixed — keep skill descriptions under the registry's limit, and catch it before merge
 
 The drive-engine description grew to 1118 characters in the change above; `tessl plugin lint` caps a `description` at 1024. That gate runs inside the publish workflow, which fires only after a merge to main, so the over-long value passed every pre-merge check and then turned main red with a failed publish (no version was published — lint fails ahead of it).
