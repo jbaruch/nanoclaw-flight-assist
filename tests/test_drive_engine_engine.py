@@ -458,3 +458,92 @@ def test_no_home_off_trip_skips_rather_than_routing_blind():
     )
     assert result.plan.creates == ()
     assert any("unresolved" in s for s in result.skipped)
+
+
+# ---------------------------------------------------------------------------
+# Homecoming survives an airport hotel the night before (#235)
+# ---------------------------------------------------------------------------
+
+
+def _staged_round_trip_schedule():
+    """BNA→SFO→BNA with an airport hotel the operator drives to the night before.
+
+    He is at a hotel when the outbound drive leaves, but he got there from the
+    house — so the trip still closes at the house.
+    """
+    return [
+        {
+            "type": "Trip",
+            "summary": "San Francisco",
+            "start": "2020-07-11",
+            "end": "2020-07-14",
+            "location": "San Francisco, CA",
+        },
+        {
+            "type": "Lodging",
+            "summary": "Check-in: Hyatt Place Nashville Airport",
+            "start": "2020-07-11T22:00:00Z",
+            "end": "2020-07-11T23:00:00Z",
+            "location": "Hyatt Place Nashville Airport",
+        },
+        {
+            "type": "Flight",
+            "summary": "BNA to SFO",
+            "start": "2020-07-12T09:00:00Z",
+            "end": "2020-07-12T14:00:00Z",
+        },
+        {
+            "type": "Lodging",
+            "summary": "Check-in: San Francisco hotel",
+            "start": "2020-07-12T16:00:00Z",
+            "end": "2020-07-14T15:00:00Z",
+            "location": "1 Market St, San Francisco, CA",
+        },
+        {
+            "type": "Flight",
+            "summary": "SFO to BNA",
+            "start": "2020-07-14T18:00:00Z",
+            "end": "2020-07-14T22:00:00Z",
+        },
+    ]
+
+
+def _staged_round_trip_chain():
+    return [
+        flight("BNA", "SFO", _dt(9), _dt(14), fid=1, trip_id=2832676),
+        flight("SFO", "BNA", _dt(18, day=14), _dt(22, day=14), fid=2, trip_id=2832676),
+    ]
+
+
+def test_a_staged_round_trip_still_drives_home_at_the_end():
+    """The homecoming test used to read the operator's position at the outbound
+    drive and see `lodging`, so the final arrival routed to the airport hotel
+    instead of the house. It now asks whether the JOURNEY left home (#235)."""
+    result = build_reconcile_plan(
+        flights=_staged_round_trip_chain(),
+        airport_info=_us_info("BNA", "SFO"),
+        current_blocks=[],
+        route=const_route(30),
+        schedule=_staged_round_trip_schedule(),
+        home_address=HOME,
+        now=NOW,
+    )
+    arrivals = [c.desired for c in result.plan.creates if c.desired.kind == "airport_arrival"]
+    assert arrivals[-1].destination == HOME
+    assert arrivals[-1].summary == "Drive: BNA → home"
+
+
+def test_the_staged_outbound_drive_starts_at_the_hotel_not_the_house():
+    """The other half of the same fix: he slept at the hotel, so that is where
+    the airport drive begins."""
+    result = build_reconcile_plan(
+        flights=_staged_round_trip_chain(),
+        airport_info=_us_info("BNA", "SFO"),
+        current_blocks=[],
+        route=const_route(30),
+        schedule=_staged_round_trip_schedule(),
+        home_address=HOME,
+        now=NOW,
+    )
+    departures = [c.desired for c in result.plan.creates if c.desired.kind == "airport_departure"]
+    assert departures[0].origin == "Hyatt Place Nashville Airport"

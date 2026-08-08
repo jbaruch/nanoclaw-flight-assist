@@ -39,7 +39,21 @@ if not _TRAVEL_CORE.is_dir():
 if str(_TRAVEL_CORE) not in sys.path:
     sys.path.insert(0, str(_TRAVEL_CORE))
 
-from trip_origin import TripAnchor, resolve_anchor  # noqa: E402
+from trip_origin import TripAnchor, opened_from_home, resolve_anchor  # noqa: E402
+
+# Re-exported so the engine reaches every planned-position question through this
+# module rather than importing travel-core twice. `opened_from_home` answers
+# "did this journey leave home", which `position_at(...).source == "home"` only
+# approximates — see its docstring in `trip_origin` (#235).
+__all__ = [
+    "GPS_IMMINENCE_MARGIN",
+    "LIVE_GPS",
+    "ResolvedOrigin",
+    "is_drive_imminent",
+    "opened_from_home",
+    "position_at",
+    "resolve_leg_origin",
+]
 
 # How close to leave-by the drive must be before a fresh live-GPS fix overrides the
 # plan. Revisit-later default per #156 Decision 3.

@@ -272,29 +272,34 @@ def _trip_begins_at(
 ) -> datetime | None:
     """When the operator physically leaves home for the trip, else None.
 
-    The trip's first timed transport departure when it has one, and otherwise
-    its first timed lodging check-in. Before that instant the date-only Trip
-    wrapper is already "active" but the planned position is still home.
+    The EARLIEST of the trip's first timed transport departure and its first
+    timed lodging check-in. Before that instant the date-only Trip wrapper is
+    already "active" but the planned position is still home.
 
-    The lodging fallback exists because keying on transport ALONE left a
-    flight-less drive trip with no begin instant at all: the gate never fired,
-    and a first-day anchor before check-in resolved to the Trip wrapper's own
-    `location` — the destination city, the exact cross-country-drive shape the
-    gate exists to prevent (#233).
+    Each half covers a case the other misses:
 
-    The fallback is deliberately a FALLBACK rather than an earliest-of. On a
-    trip that does have transport, letting a pre-flight staging hotel begin the
-    trip flips `engine.build_reconcile_plan`'s homecoming test from `home` to
-    `lodging`, and the round trip's drive home then routes to that hotel instead
-    of the house. Widening it needs that call site fixed first (#235).
+    - Transport alone left a FLIGHT-LESS drive trip with no begin instant at
+      all, so the gate never fired and a first-day anchor before check-in
+      resolved to the Trip wrapper's own `location` — the destination city, the
+      cross-country-drive shape the gate exists to prevent (#233).
+    - Transport FIRST rather than earliest missed the mirror case: an airport
+      hotel checked into the night before an early flight. The operator slept
+      there, but every instant before wheels-up read as home, so the morning
+      airport drive routed from the house he had already left (#235, the #154
+      shape reintroduced by this gate).
 
     A trip with neither signal yields None and the caller leaves the anchor as
     it was.
     """
-    departure = _first_transport_departure(records, trip_start, trip_end)
-    if departure is not None:
-        return departure
-    return _first_lodging_arrival(records, trip_start, trip_end)
+    candidates = [
+        when
+        for when in (
+            _first_transport_departure(records, trip_start, trip_end),
+            _first_lodging_arrival(records, trip_start, trip_end),
+        )
+        if when is not None
+    ]
+    return min(candidates) if candidates else None
 
 
 def resolve_anchor(
@@ -458,6 +463,54 @@ def flight_summaries(schedule: list[dict] | None) -> list[str]:
         if isinstance(summary, str) and summary.strip():
             summaries.append(summary)
     return summaries
+
+
+def opened_from_home(
+    schedule: list[dict] | None, *, at: datetime, home_address: str | None
+) -> bool:
+    """Whether the journey whose ground-reached departure sits at `at` left home.
+
+    A round trip that opened from home closes there too, so the drive off its
+    final landing goes to the house rather than to wherever the itinerary
+    happens to put the operator. `engine.build_reconcile_plan` asks this to
+    decide which final arrival is a homecoming.
+
+    It used to ask `position_at(at).source == "home"` instead, which is a
+    different question wearing the same clothes: "was he at the house at that
+    moment" rather than "did this journey start from the house". They agree
+    until the operator stages at an airport hotel the night before an early
+    flight — then he is at a hotel, but he still left from home, and the proxy
+    answers no and routes his drive home to that hotel (#235).
+
+    Asked directly: he opened from home when the planned position IS home, or
+    when this departure is the trip's own first transport departure — in which
+    case whatever lodging resolves here is a staging stay he drove to from the
+    house. A later flight inside a trip already under way is not an opening: a
+    round trip flown out of a foreign city during a long stay returns to that
+    city's hotel, not across an ocean.
+
+    Known limitation, unchanged from the proxy it replaces: a trip the operator
+    DRIVES to and then flies a round trip out of also reads as opened-from-home,
+    because its first transport departure is that flight. Telling a staging stay
+    from a destination stay needs geography this module does not have.
+
+    Returns False when no home address is configured — there is nothing to route
+    a homecoming to.
+    """
+    if home_address is None:
+        return False
+    planned = resolve_anchor(schedule, at=at, home_address=home_address)
+    if planned.source == "home":
+        return planned.address is not None
+    if not schedule:
+        return False
+    trip = _active_trip(schedule, at.astimezone(timezone.utc).date())
+    if trip is None:
+        return False
+    first_departure = _first_transport_departure(
+        schedule, _parse_day(trip.get("start")), _parse_day(trip.get("end"))
+    )
+    return first_departure is not None and at <= first_departure
 
 
 def resolve_effective_home(home_address: str | None, *, now: datetime) -> str | None:
