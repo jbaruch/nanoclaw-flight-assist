@@ -1,5 +1,17 @@
 # Changelog
 
+### Changed — drive-time alerts need to be imminent and worth acting on
+
+"Leave 4 minutes earlier" for a drive two months out was reaching the operator. Two gates were missing, and the alert fired on a percentage alone.
+
+**A two-hour horizon.** A drive that far out gets re-routed dozens of times before anyone leaves, and every intermediate swing was announced. Inside two hours the number is close to final and there is still room to act on it. A block already under way passes the horizon — that is as imminent as it gets.
+
+**A ten-minute absolute floor.** The 10% test alone fires on short drives for swings too small to matter: a 20-minute commute drifting 2 minutes is 10% and cleared the old gate. Both tests now apply, so an alert means the swing is proportionally real AND big enough to change what someone does.
+
+Nothing changes about the calendar: a sub-threshold drive-time change still patches the block silently, so the times stay accurate. Only the interruption is dropped. `_MATERIAL_UPDATE_FLOOR_SECONDS` must stay at or above the reconcile's patch tolerance — below it no Update is scheduled at all, so the alert would promise a heads-up the sweep cannot deliver; a test pins that invariant.
+
+`material_update_delta` now requires `starts_at` and `now`, and `apply_plan` takes the sweep's own cycle clock rather than reading a second one at write time — the "which `now` did the caller pass" scatter #154 was root-caused to.
+
 ## 0.2.90 — 2026-08-08
 
 ### Fixed — an airport hotel the night before no longer routes the morning drive from the house (#235)

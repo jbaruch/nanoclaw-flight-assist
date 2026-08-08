@@ -10,7 +10,8 @@ removes, airport adds, converts, and routine re-times).
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "travel-core"))
 sys.path.insert(0, str(REPO_ROOT / "skills" / "flight-assist"))
 sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
+import reconcile as reconcile_module  # noqa: E402
 from block_codec import GEN_UNIFIED, ParsedBlock  # noqa: E402
 from calendar_apply import ApplyResult, apply_plan  # noqa: E402
 from reconcile import (  # noqa: E402
@@ -64,41 +66,80 @@ class FakeCalendar:
 
 
 # --- material_update_delta --------------------------------------------------
+#
+# Alerting now needs three things at once: the drive is IMMINENT (within the
+# horizon), the swing is BIG (>= the absolute floor), and it is PROPORTIONAL
+# (>= the fraction). Everything else patches the calendar silently.
+
+SOON = _dt(11)  # inside the horizon of NOW_APPLY below
+NOW_APPLY = _dt(10)
+FAR = NOW_APPLY + timedelta(days=60)
+
+
+def _delta(prior, new, *, starts_at=SOON, now=NOW_APPLY):
+    return material_update_delta(prior, new, starts_at=starts_at, now=now)
 
 
 def test_longer_drive_is_leave_sooner():
-    assert material_update_delta(600, 900) == (5, "sooner")  # +5 min, +50%
+    assert _delta(1800, 2700) == (15, "sooner")  # +15 min, +50%
 
 
 def test_shorter_drive_is_leave_later():
-    assert material_update_delta(600, 300) == (5, "later")  # -5 min, -50%
+    assert _delta(1800, 900) == (15, "later")  # -15 min, -50%
 
 
-def test_at_patch_tolerance_and_material_fraction_alerts():
-    # 120s = the patch gate (so it actually reaches apply_plan) AND 20% — material.
-    assert material_update_delta(600, 720) == (2, "sooner")
+def test_a_two_month_out_change_is_silent_however_big():
+    """The complaint that motivated the horizon: a drive that far out is
+    re-routed dozens of times before it happens, and every swing was announced.
+    Same swing that alerts when imminent."""
+    assert _delta(1800, 2700, starts_at=FAR) is None
+    assert _delta(1800, 2700) == (15, "sooner")
 
 
-def test_ten_percent_below_patch_tolerance_is_silent():
-    # 60s IS 10%, but < the 120s patch gate — _needs_update schedules no Update,
-    # so it never reaches apply_plan; alerting on it would promise a heads-up the
-    # reconcile can't deliver. Silent. (See test_boundary_alert_reaches_apply_plan.)
-    assert material_update_delta(600, 660) is None
+def test_a_drive_already_under_way_still_alerts():
+    """Past the start is as imminent as it gets, not out of scope."""
+    assert _delta(1800, 2700, starts_at=NOW_APPLY - timedelta(minutes=5)) == (15, "sooner")
 
 
-def test_below_ten_percent_is_silent():
-    assert material_update_delta(600, 630) is None  # +30s = 5%
+def test_at_the_horizon_boundary_it_still_alerts():
+    assert _delta(1800, 2700, starts_at=NOW_APPLY + timedelta(hours=2)) == (15, "sooner")
+
+
+def test_just_past_the_horizon_it_is_silent():
+    assert _delta(1800, 2700, starts_at=NOW_APPLY + timedelta(hours=2, seconds=1)) is None
+
+
+def test_a_small_absolute_swing_is_silent_however_large_a_percentage():
+    """The other half of the complaint: a 20-minute commute drifting 4 minutes
+    is 20% and used to alert. Four minutes changes nothing anyone does."""
+    assert _delta(1200, 1440) is None  # +4 min, +20%
+
+
+def test_at_the_absolute_floor_it_alerts():
+    assert _delta(3000, 3600) == (10, "sooner")  # +600s exactly, +20%
+
+
+def test_just_below_the_absolute_floor_is_silent():
+    assert _delta(3000, 3599) is None  # +599s, one second short
 
 
 def test_large_absolute_but_under_ten_percent_is_silent():
-    # 150s change (>= patch tolerance, so it patches) on a 2000s drive is 7.5% —
-    # not a proportionally material swing, so it patches silently.
-    assert material_update_delta(2000, 2150) is None
+    """A ten-minute swing on a two-hour drive is not a traffic event."""
+    assert _delta(7200, 7800) is None  # +600s clears the floor, but is 8.3%
 
 
 def test_missing_or_zero_prior_is_never_material():
-    assert material_update_delta(None, 900) is None
-    assert material_update_delta(0, 900) is None
+    assert _delta(None, 900) is None
+    assert _delta(0, 900) is None
+
+
+def test_the_absolute_floor_never_drops_below_the_patch_gate():
+    """Below the reconcile's patch tolerance no Update is scheduled at all, so
+    the change never reaches apply_plan and the alert would promise a heads-up
+    the sweep cannot deliver."""
+    assert reconcile_module._MATERIAL_UPDATE_FLOOR_SECONDS >= (
+        reconcile_module._BASELINE_SHIFT_TOLERANCE_SECONDS
+    )
 
 
 # --- boundary: the alert threshold agrees with the reconcile patch gate ------
@@ -118,15 +159,25 @@ def _current(baseline, identity="m1"):
     )
 
 
-def test_boundary_alert_reaches_apply_plan():
-    # A 120s swing IS the patch gate: plan_reconcile emits an Update carrying the
-    # prior baseline, and apply_plan records the alert — the full production path,
-    # not just the helper in isolation.
+def test_an_alerting_swing_reaches_apply_plan():
+    # The full production path, not the helper in isolation: plan_reconcile emits
+    # an Update carrying the prior baseline and apply_plan records the alert.
+    plan = plan_reconcile([_desired("m1", "meeting_return", 2700)], [_current(1800)])
+    assert len(plan.updates) == 1
+    assert plan.updates[0].prior_baseline_seconds == 1800
+    result = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
+    assert [(u["minutes"], u["direction"]) for u in result.material_updates] == [(15, "sooner")]
+
+
+def test_a_swing_over_the_patch_gate_but_under_the_alert_floor_patches_silently():
+    # 120s clears the reconcile's patch tolerance, so the calendar IS corrected —
+    # it just no longer earns an interruption. This is the band the alert floor
+    # opened up between "worth fixing" and "worth saying".
     plan = plan_reconcile([_desired("m1", "meeting_return", 720)], [_current(600)])
     assert len(plan.updates) == 1
-    assert plan.updates[0].prior_baseline_seconds == 600
-    result = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary")
-    assert [(u["minutes"], u["direction"]) for u in result.material_updates] == [(2, "sooner")]
+    result = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
+    assert result.updated == 1
+    assert result.material_updates == []
 
 
 def test_sub_tolerance_change_produces_no_update_and_no_alert():
@@ -158,15 +209,26 @@ def test_meeting_create_recorded_airport_create_not():
 def test_material_update_recorded_routine_update_not():
     plan = ReconcilePlan(
         updates=(
-            Update("e1", _desired("mtg1", "meeting_return", 900), prior_baseline_seconds=600),
-            Update("e2", _desired("mtg2", "meeting_return", 630), prior_baseline_seconds=600),
+            Update("e1", _desired("mtg1", "meeting_return", 2700), prior_baseline_seconds=1800),
+            Update("e2", _desired("mtg2", "meeting_return", 1830), prior_baseline_seconds=1800),
         )
     )
-    result = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary")
+    result = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
     assert result.updated == 2  # both patched (calendar stays accurate)
-    assert len(result.material_updates) == 1  # only the +50% one alerts
+    assert len(result.material_updates) == 1  # only the +15min one alerts
     alert = result.material_updates[0]
-    assert (alert["meeting"], alert["minutes"], alert["direction"]) == ("Massage", 5, "sooner")
+    assert (alert["meeting"], alert["minutes"], alert["direction"]) == ("Massage", 15, "sooner")
+
+
+def test_a_far_future_update_patches_without_alerting():
+    """End to end for the horizon: the calendar still gets the corrected drive
+    time, the operator just isn't told about a change two months out."""
+    far = _desired("mtg1", "meeting_return", 2700)
+    far = replace(far, start=FAR, end=FAR + timedelta(minutes=45), anchor=FAR)
+    plan = ReconcilePlan(updates=(Update("e1", far, prior_baseline_seconds=1800),))
+    result = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
+    assert result.updated == 1
+    assert result.material_updates == []
 
 
 def test_deferred_update_is_not_recorded():
@@ -388,3 +450,33 @@ def test_a_question_appends_below_the_drive_notices():
 def test_no_questions_leaves_the_notice_unchanged():
     assert render_notification([], [], []) is None
     assert render_notification([], [], None) is None
+
+
+def test_a_far_future_change_produces_no_notice_at_all():
+    """The complaint end to end: two months out, nothing is sent. The calendar
+    is still corrected — only the interruption is dropped."""
+    far = _desired("mtg1", "meeting_return", 2700)
+    far = replace(far, start=FAR, end=FAR + timedelta(minutes=45), anchor=FAR)
+    plan = ReconcilePlan(updates=(Update("e1", far, prior_baseline_seconds=1800),))
+    applied = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
+    payload = build_sweep_payload(applied, [])
+    assert applied.updated == 1
+    assert payload["wake_agent"] is False
+    assert payload["data"]["message"] is None
+
+
+def test_the_same_change_inside_the_horizon_does_notify():
+    """Same swing, near enough to act on — the operator hears about this one."""
+    plan = ReconcilePlan(
+        updates=(
+            Update(
+                "e1",
+                _desired("mtg1", "meeting_return", 2700),
+                prior_baseline_seconds=1800,
+            ),
+        )
+    )
+    applied = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
+    payload = build_sweep_payload(applied, [])
+    assert payload["wake_agent"] is True
+    assert "leave 15 min sooner" in payload["data"]["message"]

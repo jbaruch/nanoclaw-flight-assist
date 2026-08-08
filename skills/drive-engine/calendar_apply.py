@@ -253,6 +253,7 @@ def apply_plan(
     calendar_id: str = "primary",
     budget_seconds: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    now: datetime | None = None,
 ) -> ApplyResult:
     """Execute a reconcile plan against the calendar. Returns applied counts.
 
@@ -271,8 +272,15 @@ def apply_plan(
     started this sweep are counted in `deferred` and drained on the next sweep.
     The reconcile is idempotent, so resuming never duplicates. `monotonic` is
     injected for deterministic tests.
+
+    `now` is the wall clock the operator-alert horizon is measured against (see
+    `material_update_delta`) — a drive further out than that horizon patches
+    silently. It is separate from `monotonic`, which measures only elapsed write
+    time and cannot answer "how far away is this drive"; injected for the same
+    determinism reason, defaulting to the real clock.
     """
     result = ApplyResult()
+    now = now or datetime.now(timezone.utc)
     deadline = monotonic() + budget_seconds if budget_seconds is not None else None
 
     def over_budget() -> bool:
@@ -296,9 +304,14 @@ def apply_plan(
             result.errors.append(f"update-patch {u.desired.identity}: {exc}")
             continue
         result.updated += 1
-        # Alert only on a MATERIAL drive-time change (traffic swing worth acting
-        # on); routine sub-threshold re-times patch silently.
-        delta = material_update_delta(u.prior_baseline_seconds, u.desired.baseline_seconds)
+        # Alert only on a MATERIAL drive-time change (a swing worth acting on, on
+        # a drive near enough to act on); everything else patches silently.
+        delta = material_update_delta(
+            u.prior_baseline_seconds,
+            u.desired.baseline_seconds,
+            starts_at=u.desired.start,
+            now=now,
+        )
         if delta is not None:
             minutes, direction = delta
             result.material_updates.append(

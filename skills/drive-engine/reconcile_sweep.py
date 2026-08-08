@@ -482,6 +482,7 @@ def finish_sweep(
     calendar,
     apply: Callable = apply_plan,
     drive_or_fly_questions: list[str] | None = None,
+    now: datetime | None = None,
 ) -> dict:
     """Shadow-render or apply the plan, and return the sweep's stdout payload.
 
@@ -497,7 +498,13 @@ def finish_sweep(
     LIVE: gives scheduled apply a fixed write-phase budget, independent of plan
     duration, and defers the remainder to the next idempotent sweep. An explicit
     `DRIVE_ENGINE_UNBOUNDED_APPLY=1` repair run passes no write budget and drains
-    the complete plan. Per-call network timeouts remain active in both modes."""
+    the complete plan. Per-call network timeouts remain active in both modes.
+
+    `now` is the sweep's own cycle clock, passed through so the operator-alert
+    horizon is measured against the same instant the plan was built from rather
+    than a second clock read at write time — the "which `now` did the caller
+    pass" scatter #154 was root-caused to. Omitted, `apply_plan` reads the real
+    clock."""
     if _shadow_mode():
         print(render_plan(plan), file=sys.stderr)
         for line in skipped:
@@ -509,6 +516,7 @@ def finish_sweep(
         calendar=calendar,
         calendar_id="primary",
         budget_seconds=_apply_budget_seconds(),
+        now=now,
     )
 
     for line in skipped:
@@ -1003,6 +1011,7 @@ def _run_sweep() -> dict:
         skipped,
         calendar=calendar,
         drive_or_fly_questions=drive_or_fly_questions,
+        now=now,
     )
 
 

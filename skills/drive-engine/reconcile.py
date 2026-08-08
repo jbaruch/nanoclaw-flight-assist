@@ -24,7 +24,7 @@ Three defect classes from the design collapse into this one diff:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from block_codec import GEN_LEGACY_FADRIVE, GEN_UNIFIED, ParsedBlock
 
@@ -145,8 +145,32 @@ _BASELINE_SHIFT_TOLERANCE_SECONDS = 120
 # silently so the calendar stays accurate; only the notification is suppressed.
 _MATERIAL_UPDATE_FRACTION = 0.10
 
+# ...and by at least this many seconds in absolute terms. A percentage alone
+# fires on a short drive for a swing too small to act on: a 20-minute commute
+# drifting 2 minutes is 10% and cleared the old gate, which is how "leave 4
+# minutes earlier" reached the operator. Ten minutes is the point where the
+# advice changes what someone actually does.
+#
+# MUST stay >= `_BASELINE_SHIFT_TOLERANCE_SECONDS`: below that the reconcile
+# schedules no Update at all, so the change never reaches `apply_plan` to be
+# notified and the alert would promise a heads-up the sweep cannot deliver.
+_MATERIAL_UPDATE_FLOOR_SECONDS = 600
 
-def material_update_delta(prior_seconds: int | None, new_seconds: int) -> tuple[int, str] | None:
+# ...and only once the drive is near enough to act on. A traffic re-route two
+# months out is not information — the routed duration will be recomputed dozens
+# of times before the operator leaves, and every intermediate swing was being
+# announced. Inside two hours the number is close to final and there is still
+# room to leave earlier.
+_MATERIAL_UPDATE_HORIZON = timedelta(hours=2)
+
+
+def material_update_delta(
+    prior_seconds: int | None,
+    new_seconds: int,
+    *,
+    starts_at: datetime,
+    now: datetime,
+) -> tuple[int, str] | None:
     """Classify a drive-duration change for operator alerting.
 
     Returns `(minutes, direction)` when the change is material, else None.
@@ -154,20 +178,30 @@ def material_update_delta(prior_seconds: int | None, new_seconds: int) -> tuple[
     `"later"` when it got shorter (leave later). A missing / non-positive prior
     duration can't be compared, so it is never material.
 
-    Material requires BOTH:
-      - a swing of at least `_BASELINE_SHIFT_TOLERANCE_SECONDS`. This MUST match
-        `_needs_update`'s patch gate: a smaller drift schedules no Update, so it
-        never reaches `apply_plan` to be notified — alerting on it would promise
-        a heads-up the reconcile can't deliver. The floor is also >= 60s, so the
-        reported minute count (floored) is always >= 1.
+    `starts_at` is when the block begins — the moment the operator acts on it —
+    and is compared against `now` for the horizon gate. Both are required: a
+    duration change carries no meaning without knowing when the drive is, and
+    defaulting either would silently restore the far-future noise.
+
+    Material requires ALL of:
+      - the drive begins within `_MATERIAL_UPDATE_HORIZON`. Further out the
+        number is provisional and will move again before it matters.
+      - a swing of at least `_MATERIAL_UPDATE_FLOOR_SECONDS` — big enough to
+        change what the operator does, and (being >= the reconcile's patch
+        tolerance) big enough that an Update was actually scheduled.
       - a swing of at least `_MATERIAL_UPDATE_FRACTION` of the prior duration —
         a proportionally real traffic change, not a large absolute move on an
         already-long drive.
+
+    A block already under way (`starts_at` at or before `now`) passes the
+    horizon: the drive is as imminent as it gets.
     """
     if prior_seconds is None or prior_seconds <= 0:
         return None
+    if starts_at - now > _MATERIAL_UPDATE_HORIZON:
+        return None
     diff = new_seconds - prior_seconds
-    if abs(diff) < _BASELINE_SHIFT_TOLERANCE_SECONDS:
+    if abs(diff) < _MATERIAL_UPDATE_FLOOR_SECONDS:
         return None
     if abs(diff) / prior_seconds < _MATERIAL_UPDATE_FRACTION:
         return None
