@@ -1,0 +1,233 @@
+"""Contract of the ExpertFlyer API client.
+
+The browser layer, the credential and every parsing rule live in the
+`expertflyer-api` service and are tested there. What matters here is that this
+container builds the right request, relays the service's verdict without
+flattening it, and never mistakes a failure for a result.
+"""
+
+import email.message
+import importlib.util
+import json
+import urllib.error
+from io import BytesIO
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load(name: str, relpath: str):
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / relpath)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+client = _load("expertflyer_client", "skills/expertflyer/scripts/expertflyer.py")
+
+
+class _Response:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture
+def capture(monkeypatch):
+    """Record the outgoing request and return a canned payload."""
+    seen = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        seen["method"] = request.get_method()
+        seen["headers"] = dict(request.header_items())
+        seen["body"] = json.loads(request.data.decode()) if request.data else None
+        seen["timeout"] = timeout
+        return _Response(seen.get("_payload", {"ok": True}))
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.delenv(client.TOKEN_ENV, raising=False)
+    monkeypatch.setenv(client.URL_ENV, "http://service:8090")
+    return seen
+
+
+def test_seats_builds_the_query(capture):
+    client.run(
+        client.parse_args(
+            [
+                "seats",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2026-08-11",
+                "--cabin",
+                "comfort+",
+                "--want",
+                "non-middle",
+            ]
+        )
+    )
+    assert capture["url"].startswith("http://service:8090/seats?")
+    assert "cabin=comfort%2B" in capture["url"]
+    assert "want=non-middle" in capture["url"]
+    assert capture["method"] == "GET"
+
+
+def test_omitted_route_is_not_sent_as_empty(capture):
+    """The service resolves the route itself; empty params would override that."""
+    client.run(
+        client.parse_args(
+            ["seats", "--airline", "DL", "--flight", "2957", "--date", "2026-08-11", "--cabin", "W"]
+        )
+    )
+    assert "origin=" not in capture["url"]
+    assert "destination=" not in capture["url"]
+
+
+def test_fare_class_sends_the_class_alias(capture):
+    client.run(
+        client.parse_args(
+            [
+                "fare-class",
+                "--origin",
+                "JFK",
+                "--destination",
+                "AMS",
+                "--date",
+                "2026-08-31",
+                "--airline",
+                "KL",
+                "--class",
+                "Z",
+                "--flight",
+                "642",
+            ]
+        )
+    )
+    assert "class=Z" in capture["url"]
+    assert "flight=642" in capture["url"]
+
+
+def test_create_alert_posts_a_json_body(capture):
+    client.run(
+        client.parse_args(
+            [
+                "create-alert",
+                "--kind",
+                "fare-class",
+                "--airline",
+                "KL",
+                "--flight",
+                "642",
+                "--date",
+                "2026-08-31",
+                "--origin",
+                "JFK",
+                "--destination",
+                "AMS",
+                "--class",
+                "Z",
+            ]
+        )
+    )
+    assert capture["method"] == "POST"
+    assert capture["body"]["kind"] == "fare-class"
+    assert capture["body"]["class"] == "Z"
+    assert capture["body"]["force"] is False
+
+
+def test_delete_alert_uses_the_id_path(capture):
+    client.run(client.parse_args(["delete-alert", "--id", "5736694"]))
+    assert capture["url"].endswith("/alerts/5736694")
+    assert capture["method"] == "DELETE"
+
+
+def test_bearer_is_sent_when_configured(capture, monkeypatch):
+    monkeypatch.setenv(client.TOKEN_ENV, "s3cret")
+    client.run(client.parse_args(["alerts"]))
+    assert capture["headers"]["Authorization"] == "Bearer s3cret"
+
+
+def test_no_bearer_header_without_a_token(capture):
+    client.run(client.parse_args(["alerts"]))
+    assert "Authorization" not in capture["headers"]
+
+
+def _http_error(status, payload, monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            status,
+            "err",
+            email.message.Message(),
+            BytesIO(json.dumps(payload).encode()),
+        )
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+
+
+def test_expired_session_is_relayed_as_auth(monkeypatch):
+    _http_error(503, {"detail": {"error": "auth", "detail": "session expired"}}, monkeypatch)
+    result = client.run(client.parse_args(["alerts"]))
+    assert result == {"error": "auth", "detail": "session expired"}
+
+
+def test_bot_wall_stays_distinct_from_auth(monkeypatch):
+    """Upstream 403s both ways; only the service can tell them apart."""
+    _http_error(502, {"detail": {"error": "blocked", "detail": "bot wall"}}, monkeypatch)
+    assert client.run(client.parse_args(["alerts"]))["error"] == "blocked"
+
+
+def test_service_down_is_unreachable_not_a_result(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    result = client.run(client.parse_args(["alerts"]))
+    assert result["error"] == "unreachable"
+    assert client.URL_ENV in result["detail"]
+
+
+def test_non_json_error_body_still_reports(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "err",
+            email.message.Message(),
+            BytesIO(b"<html>gateway blew up</html>"),
+        )
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    result = client.run(client.parse_args(["alerts"]))
+    assert result["error"] == "upstream"
+    assert "gateway blew up" in result["detail"]
+
+
+def test_main_exits_non_zero_on_error(monkeypatch, capsys):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    code = client.main(["alerts"])
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "unreachable"
+
+
+def test_main_exits_zero_on_success(capture, capsys):
+    capture["_payload"] = {"count": 3, "alerts": []}
+    assert client.main(["alerts"]) == 0
+    assert json.loads(capsys.readouterr().out)["count"] == 3
