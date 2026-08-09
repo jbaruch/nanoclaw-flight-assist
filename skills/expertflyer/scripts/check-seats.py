@@ -26,8 +26,10 @@ from expertflyer_session import (  # noqa: E402
     ExpertFlyerError,
     emit,
     fail,
+    first_payload_with,
     goto_checked,
-    session_page,
+    goto_collecting,
+    with_session,
 )
 
 # On the status results page each airport code sits on its own line, with
@@ -69,48 +71,19 @@ async def run(args) -> int:
     cabin = ep.cabin_code(args.cabin)
     wants = ep.normalize_wants(args.want)
 
-    async with session_page() as page:
+    async def work(page):
         origin, destination = args.origin, args.destination
         if not (origin and destination):
             origin, destination = await resolve_route(page, args.airline, args.flight, args.date)
 
         url = ep.seat_map_url(origin, destination, args.date, args.airline, args.flight, cabin)
-        payloads: list[str] = []
-        unreadable = 0
-
-        async def capture(response):
-            nonlocal unreadable
-            ctype = (await response.header_value("content-type")) or ""
-            if "x-component" not in ctype and "json" not in ctype:
-                return
-            try:
-                payloads.append(await response.text())
-            except Exception:  # noqa: BLE001 - a body we cannot re-read is simply not a source
-                # Playwright cannot replay every streamed body; the seat map
-                # arrives in one of the readable ones. Counted, not silenced.
-                unreadable += 1
-
-        page.on("response", capture)
-        await goto_checked(page, url, settle_ms=4000)
-
-        seat_map = None
-        for body in payloads:
-            try:
-                seat_map = ep.extract_json_object(body, "seatMap")
-                break
-            except (KeyError, ValueError):
-                continue
-        if unreadable:
-            print(
-                f"expertflyer: {unreadable} response body/bodies could not be re-read "
-                f"({len(payloads)} readable)",
-                file=sys.stderr,
-            )
+        bodies = await goto_collecting(page, url)
+        seat_map = first_payload_with(bodies, lambda body: ep.extract_json_object(body, "seatMap"))
         if seat_map is None:
             raise ExpertFlyerError(
-                f"no seat map in the response for {args.airline}{args.flight} "
-                f"{origin}-{destination} {args.date} cabin {cabin} — the cabin may "
-                "not exist on this aircraft"
+                f"no seat map in the {len(bodies)} responses for {args.airline}"
+                f"{args.flight} {origin}-{destination} {args.date} cabin {cabin} — "
+                "the cabin may not exist on this aircraft"
             )
 
         total_seats = sum(1 for _ in ep.iter_seats(seat_map))
@@ -133,6 +106,8 @@ async def run(args) -> int:
                 "recommend_alert": cabin_present and ep.recommend_alert(matching),
             }
         )
+
+    return await with_session(work)
 
 
 def main(argv=None) -> int:

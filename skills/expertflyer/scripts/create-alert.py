@@ -32,7 +32,8 @@ from expertflyer_session import (  # noqa: E402
     emit,
     fail,
     goto_checked,
-    session_page,
+    goto_collecting,
+    with_session,
 )
 
 ALERTS_URL = "https://www.expertflyer.com/alerts"
@@ -55,36 +56,110 @@ def parse_args(argv=None):
 
 
 async def existing_alerts(page) -> list[dict]:
-    """Read the account's alert objects out of the page payload."""
-    payloads: list[str] = []
+    """Read the account's alert objects out of the page payload.
 
-    async def capture(response):
-        ctype = (await response.header_value("content-type")) or ""
-        if "x-component" not in ctype and "json" not in ctype:
-            return
-        try:
-            payloads.append(await response.text())
-        except Exception:  # noqa: BLE001 - a body we cannot re-read is simply not a source
-            pass
+    The rendered /alerts page defaults to the Flight Alerts tab and says
+    "No alerts found" even when seat alerts exist, so its text is not a usable
+    source of truth.
 
-    page.on("response", capture)
-    await goto_checked(page, ALERTS_URL, settle_ms=3500)
-    page.remove_listener("response", capture)
-
-    alerts: list[dict] = []
-    for body in payloads:
-        alerts.extend(ep.extract_alerts(body))
-    return list({a.get("id"): a for a in alerts}.values())
+    Aggregates every response rather than taking the first that parses: the
+    alert list arrives split across payloads, and stopping at the first one
+    missed the fare-class alerts entirely, so the duplicate guard let a second
+    copy through.
+    """
+    bodies = await goto_collecting(page, ALERTS_URL, settle_ms=3500)
+    found: list[dict] = []
+    for body in bodies:
+        found.extend(ep.extract_alerts(body))
+    return list({a.get("id"): a for a in found}.values())
 
 
-def alert_matches(alert: dict, args, cabin: str | None) -> bool:
+SEAT_ALERT_TYPE = "SEAT_MAP"
+
+
+def alert_matches(alert: dict, args, class_code: str | None) -> bool:
+    """Does this stored alert already watch what we are about to create?
+
+    A seat alert and a fare-class alert on the same flight are different
+    watches, so the alert type is part of the identity — otherwise creating a
+    Z alert would be refused because a seat alert exists.
+    """
+    is_seat = alert.get("alertType") == SEAT_ALERT_TYPE
+    if is_seat != (args.kind == "seat"):
+        return False
     return (
         str(alert.get("flightNumber")) == str(args.flight)
         and (alert.get("airlineCode") or "").upper() == args.airline.upper()
         and (alert.get("departAirportCode") or "").upper() == args.origin.upper()
         and alert.get("status") == ACTIVE
-        and (cabin is None or (alert.get("classCode") or "").upper() == cabin.upper())
+        and (class_code is None or (alert.get("classCode") or "").upper() == class_code.upper())
     )
+
+
+async def create_fare_class_alert(page, args, fare_class: str) -> str:
+    """Open the per-row Create Alert modal for one flight and submit it.
+
+    Row order is not assumed: each row's modal titles itself
+    "Create Flight Alert (<flight number>)", so the right row is confirmed
+    before anything is filled.
+    """
+    url = ep.availability_url(args.origin, args.destination, args.date, args.airline, fare_class)
+    await goto_checked(page, url, settle_ms=4000)
+
+    buttons = page.locator('button[title="Create Alert"]')
+    count = await buttons.count()
+    if not count:
+        raise ExpertFlyerError(
+            f"no Create Alert control on the {args.origin.upper()}-"
+            f"{args.destination.upper()} {args.date} results — no flights that day"
+        )
+
+    wanted = str(args.flight).lstrip("0")
+    for index in range(count):
+        await buttons.nth(index).click()
+        await page.wait_for_timeout(2000)
+        # Read the modal container, not a text locator: "Create Flight Alert"
+        # also matches an element that omits the flight number.
+        modal = page.locator("div.fixed.inset-0").last
+        title = (await modal.inner_text()) if await modal.count() else ""
+        if f"({wanted})" in title.replace(" ", ""):
+            break
+        cancel = page.get_by_role("button", name="Cancel").first
+        if await cancel.count():
+            await cancel.click()
+        else:
+            await page.keyboard.press("Escape")
+        await page.wait_for_timeout(800)
+    else:
+        raise ExpertFlyerError(
+            f"{args.airline.upper()}{args.flight} has no row on this route/date — "
+            "check the flight number with check-fare-class.py"
+        )
+
+    # Scope every field to the modal: ids repeat across the page, and the
+    # modal's own copies are the only ones bound to this flight.
+    modal = page.locator("div.fixed.inset-0").last
+    name = await modal.locator("#alertName").first.input_value()
+
+    # Class Code is a plain text input, NOT an autocomplete — no option list
+    # appears. Never press Enter here: it submits the modal, which creates the
+    # alert behind the verification step's back.
+    class_box = modal.locator("#classType").first
+    await class_box.click()
+    await class_box.fill(fare_class)
+    await page.wait_for_timeout(700)
+    registered = (await class_box.input_value()).strip().upper()
+    if not registered.startswith(fare_class.upper()):
+        raise ExpertFlyerError(
+            f"class code {fare_class} did not register on the form (got {registered!r})"
+        )
+
+    submit = modal.get_by_role("button", name="Create Alert", exact=False).last
+    if await submit.is_disabled():
+        raise ExpertFlyerError("Create Alert stayed disabled after filling the class code")
+    await submit.click()
+    await page.wait_for_timeout(4500)
+    return name
 
 
 async def create_seat_alert(page, args, cabin: str | None, values) -> str:
@@ -126,19 +201,22 @@ async def create_seat_alert(page, args, cabin: str | None, values) -> str:
 
 
 async def run(args) -> int:
-    cabin = ep.cabin_code(args.cabin) if args.cabin else None
     if args.kind == "seat":
-        if not cabin:
+        class_code = ep.cabin_code(args.cabin) if args.cabin else None
+        if not class_code:
             raise ValueError("--cabin is required for a seat alert")
         values = ep.criterion_values(args.want)
     else:
         if not args.fare_class:
             raise ValueError("--class is required for a fare-class alert")
+        class_code = args.fare_class.strip().upper()
+        if len(class_code) != 1 or not class_code.isalpha():
+            raise ValueError(f"--class expects one fare-class letter, got {args.fare_class!r}")
         values = ()
 
-    async with session_page() as page:
+    async def work(page):
         before = await existing_alerts(page)
-        duplicate = next((a for a in before if alert_matches(a, args, cabin)), None)
+        duplicate = next((a for a in before if alert_matches(a, args, class_code)), None)
         if duplicate and not args.force:
             return emit(
                 {
@@ -146,20 +224,23 @@ async def run(args) -> int:
                     "reason": "already_exists",
                     "alert_id": duplicate.get("id"),
                     "alert_name": duplicate.get("name"),
-                    "detail": "an active alert already watches this flight and cabin",
+                    "detail": "an active alert already watches this flight and class",
                 }
             )
 
-        if args.kind != "seat":
-            raise ExpertFlyerError(
-                "fare-class alert creation is not implemented — only seat alerts are "
-                "wired end to end. Use check-fare-class.py to report inventory."
-            )
-
-        name = await create_seat_alert(page, args, cabin, values)
+        if args.kind == "seat":
+            name = await create_seat_alert(page, args, class_code, values)
+        else:
+            name = await create_fare_class_alert(page, args, class_code)
         after = await existing_alerts(page)
+        return name, after
 
-    created = next((a for a in after if alert_matches(a, args, cabin)), None)
+    outcome = await with_session(work)
+    if isinstance(outcome, int):
+        return outcome  # the duplicate guard already emitted
+    name, after = outcome
+
+    created = next((a for a in after if alert_matches(a, args, class_code)), None)
     if created is None:
         raise ExpertFlyerError(
             f"submitted the alert for {args.airline.upper()}{args.flight} but it does "

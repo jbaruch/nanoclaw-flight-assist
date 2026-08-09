@@ -62,18 +62,42 @@ def _stealth_factories():
     return create_browser, create_stealth_context
 
 
+def _login_help() -> str:
+    """How to get a session, phrased for whichever mode is configured."""
+    from expertflyer_login import EMAIL_ENV, PASSWORD_ENV
+
+    return (
+        f"set {EMAIL_ENV} and {PASSWORD_ENV} so the skill can log in itself, or "
+        "log in once in a headed browser and save the context's storage_state"
+    )
+
+
+async def ensure_state() -> None:
+    """Make sure a session file exists, logging in when it does not.
+
+    Credentials turn the ~7-day expiry into a self-healing condition instead of
+    a weekly manual re-capture that always lapses mid-trip.
+    """
+    from expertflyer_login import credentials_available, login_and_save
+
+    raw = os.environ.get(STATE_ENV)
+    if not raw:
+        raise AuthError(f"{STATE_ENV} is unset — {_login_help()}.")
+    if Path(raw).is_file():
+        return
+    if not credentials_available():
+        raise AuthError(f"{STATE_ENV}={raw!r} does not exist — {_login_help()}.")
+    await login_and_save(raw)
+
+
 def load_storage_state() -> dict:
     """Read the captured session, or explain how to produce one."""
     raw = os.environ.get(STATE_ENV)
     if not raw:
-        raise AuthError(
-            f"{STATE_ENV} is unset — point it at a captured ExpertFlyer "
-            "storage_state JSON file (log in once in a headed browser and save "
-            "the context's storage_state)."
-        )
+        raise AuthError(f"{STATE_ENV} is unset — {_login_help()}.")
     path = Path(raw)
     if not path.is_file():
-        raise AuthError(f"{STATE_ENV}={raw!r} does not exist — recapture the session.")
+        raise AuthError(f"{STATE_ENV}={raw!r} does not exist — {_login_help()}.")
     try:
         state = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
@@ -100,6 +124,74 @@ async def session_page():
         finally:
             await ctx.close()
             await browser.close()
+
+
+async def with_session(work):
+    """Run `work(page)` against an authenticated page, re-logging in once.
+
+    The stored session lasts ~7 days, so expiry is routine rather than
+    exceptional. With credentials configured an expired session is refreshed
+    and the work retried; without them the AuthError propagates so the caller
+    reports something actionable.
+    """
+    from expertflyer_login import credentials_available, login_and_save
+
+    await ensure_state()
+    try:
+        async with session_page() as page:
+            return await work(page)
+    except AuthError:
+        if not credentials_available():
+            raise
+        await login_and_save(os.environ[STATE_ENV])
+        async with session_page() as page:
+            return await work(page)
+
+
+# Seat maps, availability and alerts arrive in RSC responses fetched after
+# hydration, so they are not in the page's inlined __next_f payload. Listening
+# for responses and re-reading their bodies is unreliable — Playwright cannot
+# replay a streamed body, which made the seat map intermittently unreadable.
+# Fetching each response through a route handler keeps the body in hand.
+_COLLECTED_TYPES = ("document", "fetch", "xhr")
+
+
+async def goto_collecting(page, url: str, settle_ms: int = 4000) -> list[str]:
+    """Navigate and return the bodies of the data responses the page fetched."""
+    bodies: list[str] = []
+
+    async def handler(route):
+        request = route.request
+        if request.resource_type not in _COLLECTED_TYPES:
+            await route.continue_()
+            return
+        try:
+            response = await route.fetch()
+            body = await response.text()
+        except Exception:  # noqa: BLE001 - a request we cannot fetch is simply not a source
+            await route.continue_()
+            return
+        bodies.append(body)
+        await route.fulfill(response=response, body=body)
+
+    await page.route("**/*", handler)
+    try:
+        await goto_checked(page, url, settle_ms=settle_ms)
+    finally:
+        await page.unroute("**/*", handler)
+    return bodies
+
+
+def first_payload_with(bodies, extract):
+    """Apply `extract` to each body, returning the first truthy result."""
+    for body in bodies:
+        try:
+            found = extract(body)
+        except (KeyError, ValueError):
+            continue
+        if found:
+            return found
+    return None
 
 
 async def goto_checked(page, url: str, settle_ms: int = 2500):

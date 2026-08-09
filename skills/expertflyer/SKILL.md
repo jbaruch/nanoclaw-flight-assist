@@ -11,7 +11,7 @@ Every alert request is **check first, alert only if absent**. An alert for somet
 
 Run the scripts. Do not drive the site yourself — the pages ship structured payloads that the scripts read, and scraping the rendered text invents flights that do not exist. Reference contract: `references/web-contract.md`.
 
-Both `EXPERTFLYER_STORAGE_STATE` (path to the captured session) and `FIFTY_TABS_SRC` (the stealth layer) must be set; without stealth every request returns 403.
+`EXPERTFLYER_STORAGE_STATE` (session file path) and `FIFTY_TABS_SRC` (the stealth layer) must be set; without stealth every request returns 403. Set `EXPERTFLYER_EMAIL` and `EXPERTFLYER_PASSWORD` too and the scripts log in by themselves when the session is missing or expired — otherwise an expired session is reported for a human to re-capture.
 
 ## Step 1 — Check fare-class (upgrade) inventory
 
@@ -27,9 +27,9 @@ Outputs JSON: `flight`, `seats`, `available`, `display_capped`, `alternatives` (
 
 `seats: 0` means the bucket exists and is empty — an answer, not a missing value. `display_capped: true` means *at least* that many. Codeshares are excluded by default because inventory lives on the operating carrier; pass `--include-codeshares` to see them.
 
-Report the count plainly. When `available` is true, say so and **do not** offer an alert. When false, name the `alternatives` and tell the operator ExpertFlyer cannot watch a fare class from this skill yet (Step 3 covers seat alerts only) — they can set a Quick Alert by hand at `/alerts/create/quick-alert`.
+Report the count plainly. When `available` is true, say so and **do not** offer an alert. When false, name any `alternatives` and offer the fare-class alert (Step 3).
 
-Finish here.
+Finish here unless the operator accepts the alert.
 
 ## Step 2 — Check seat availability
 
@@ -49,21 +49,27 @@ When `matching` is non-empty, tell the operator which seat is open and **do not*
 
 Finish here unless the operator accepts the alert.
 
-## Step 3 — Create a seat alert
+## Step 3 — Create an alert
 
-Only after Step 2 reported nothing matching, or the operator explicitly asked for the alert regardless.
+Only after Step 1 or Step 2 reported the wanted thing absent, or the operator explicitly asked for the alert regardless.
 
 ```bash
+# Seat alert — needs --cabin and --want
 python3 /home/node/.claude/skills/tessl__expertflyer/scripts/create-alert.py \
     --kind seat --airline DL --flight 2957 --date 2026-08-11 \
     --origin ATL --destination YYZ --cabin "comfort+" --want non-middle
+
+# Fare-class alert — needs --class
+python3 /home/node/.claude/skills/tessl__expertflyer/scripts/create-alert.py \
+    --kind fare-class --airline KL --flight 642 --date 2026-08-31 \
+    --origin JFK --destination AMS --class Z
 ```
 
-Route is required here (Step 2 reports it). Outputs `{"created": true, "alert_id": ..., "criteria": ["AISLE","WINDOW"], "verified_in_account": true}`.
+Route is required here; Steps 1 and 2 both report it. Outputs `{"created": true, "alert_id": ..., "status": "ACTIVE", "verified_in_account": true}`.
 
-The script refuses to duplicate an existing active alert for the same flight and cabin, exiting 0 with `{"created": false, "reason": "already_exists", "alert_id": ...}`. Relay that reason; do not retry with `--force` unless the operator asks.
+The script refuses to duplicate an active alert of the same kind on the same flight and class, exiting 0 with `{"created": false, "reason": "already_exists", "alert_id": ...}`. A seat alert and a fare-class alert on one flight are different watches, so having one never blocks the other. Relay the refusal; do not retry with `--force` unless the operator asks.
 
-`verified_in_account` comes from re-reading the account's alert objects after submitting. Report a failure there as **not created**, never as success. Fare-class alerts are not wired — `--kind fare-class` exits with an error rather than pretending.
+`verified_in_account` comes from re-reading the account's alert objects after submitting. Report a failure there as **not created**, never as success.
 
 Finish here.
 
@@ -75,4 +81,6 @@ Run when any step above reports `{"error": "auth"}` or `{"error": "blocked"}`.
 python3 /home/node/.claude/skills/tessl__expertflyer/scripts/check-access.py
 ```
 
-`{"error": "auth"}` means the session expired — they last ~7 days and must be re-captured by logging in with a headed browser and saving the context's `storage_state`. `{"error": "blocked"}` means the bot wall rejected the request; never retry it in a loop, report it. The two are indistinguishable by status code, which is why this script exists. Report the diagnostic verbatim and finish here.
+`{"error": "auth"}` means the session expired or login failed; the detail carries ExpertFlyer's own message (e.g. `WRONG EMAIL OR PASSWORD.`). With `EXPERTFLYER_EMAIL` / `EXPERTFLYER_PASSWORD` set the scripts already retried a login before reporting, so an auth error here means the credentials themselves need attention. Without them, a human must re-capture the `storage_state`.
+
+`{"error": "blocked"}` means the bot wall rejected the request; never retry it in a loop, report it. The two are indistinguishable by status code, which is why this script exists. Report the diagnostic verbatim and finish here.

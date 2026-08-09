@@ -25,8 +25,9 @@ from expertflyer_session import (  # noqa: E402
     ExpertFlyerError,
     emit,
     fail,
-    goto_checked,
-    session_page,
+    first_payload_with,
+    goto_collecting,
+    with_session,
 )
 
 
@@ -73,28 +74,12 @@ async def run(args) -> int:
         fare_class,
         exclude_codeshares=not args.include_codeshares,
     )
-    payloads: list[str] = []
 
-    async with session_page() as page:
+    async def work(page):
+        bodies = await goto_collecting(page, url)
+        return first_payload_with(bodies, ep.availability_flights)
 
-        async def capture(response):
-            ctype = (await response.header_value("content-type")) or ""
-            if "x-component" not in ctype and "json" not in ctype:
-                return
-            try:
-                payloads.append(await response.text())
-            except Exception:  # noqa: BLE001 - a body we cannot re-read is simply not a source
-                pass
-
-        page.on("response", capture)
-        await goto_checked(page, url, settle_ms=4000)
-
-    flights: list[dict] = []
-    for body in payloads:
-        found = ep.availability_flights(body)
-        if found:
-            flights = found
-            break
+    flights = await with_session(work)
     if not flights:
         raise ExpertFlyerError(
             f"no structured availability for {args.airline.upper()} "

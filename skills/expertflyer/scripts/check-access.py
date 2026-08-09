@@ -26,18 +26,22 @@ from expertflyer_session import (  # noqa: E402
     fail,
     goto_checked,
     load_storage_state,
-    session_page,
+    with_session,
 )
 
 PROBE_URL = "https://www.expertflyer.com/alerts"
 
 
 async def run() -> int:
+    async def work(page):
+        await goto_checked(page, PROBE_URL, settle_ms=2500)
+        return await page.inner_text("body")
+
+    # Reach the site first: with_session logs in when no session file exists,
+    # so reading the file up front would fail before login ever ran.
+    body = await with_session(work)
     state = load_storage_state()
     cookie_names = sorted({c.get("name", "") for c in state.get("cookies", ())})
-    async with session_page() as page:
-        await goto_checked(page, PROBE_URL, settle_ms=2500)
-        body = await page.inner_text("body")
     return emit(
         {
             "ok": True,
