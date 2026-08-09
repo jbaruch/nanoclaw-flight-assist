@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.93 — 2026-08-09
+
 ### Changed — the outer legs no longer route through a hotel the operator drives straight past (#231 follow-up)
 
 The outbound landed at the lodging at the exact instant the first local drive left it. Zero dwell — arriving and departing together, a stop made only to leave again. On the live Gatlinburg trip that read as "drive 3h50m to the hotel, then immediately drive to the ceremony."
