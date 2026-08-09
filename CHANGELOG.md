@@ -1,5 +1,17 @@
 # Changelog
 
+### Added — ExpertFlyer seat and fare-class checks, via a service (#229)
+
+Adds the `expertflyer` skill: check seat availability in a named cabin, check fare-class inventory for an upgrade certificate, and create seat or fare-class alerts.
+
+Every alert request is **check first, alert only if absent**. An alert for something already bookable is worse than useless — it delays the booking while the operator waits for an email describing space they could have taken on the spot. Both checks report `recommend_alert`, and creation refuses to duplicate an active watch on the same flight and class. A seat alert and a fare-class alert on one flight are different watches, so one never blocks the other.
+
+The browser automation, the ExpertFlyer credential and the minted session live in the separate `jbaruch/expertflyer-api` service, not here. ExpertFlyer publishes no API, so the capability needs a real browser and an Auth0 login whose password rides in the request body — the one place OneCLI's gateway cannot substitute a placeholder, unlike the TripIt feed token it injects into a URL path. Rather than put a raw credential back into a container running an LLM with tool access, the automation moved to a service container that runs no LLM, following the `tripit-api` precedent. This plugin ships a stdlib-only HTTP client (`skills/expertflyer/scripts/expertflyer.py`) and holds no credential, no session and no browser.
+
+Response semantics the agent must not re-derive live in `skills/expertflyer/references/web-contract.md`: `seats: 0` is an answer rather than missing data; `display_capped` means *at least* that many because the display stops at 9; `cabin_present: false` distinguishes a cabin the aircraft lacks from a full one, which otherwise look identical and would draw an alert on a cabin that can never open. Premium economy is Delta's **Premium Select** (`A`), a different cabin from Comfort+ (`W`) — the service rejects an unrecognised cabin rather than defaulting to economy.
+
+Failures are relayed, not flattened: `unreachable` (service down or misconfigured URL), `auth` (the service could not authenticate, after retrying a login itself) and `blocked` (ExpertFlyer's bot wall — never retried in a loop). Upstream answers 403 to both a bot-walled and an unauthenticated request, so only the service can tell those apart.
+
 ## 0.2.96 — 2026-08-09
 
 ### Changed — an unanswered drive-or-fly question is nudged daily instead of asked once (#240)
