@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.97 — 2026-08-09
+
 ### Added — ExpertFlyer seat and fare-class checks, via a service (#229)
 
 Adds the `expertflyer` skill: check seat availability in a named cabin, check fare-class inventory for an upgrade certificate, and create seat or fare-class alerts.
