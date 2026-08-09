@@ -848,10 +848,12 @@ def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
         def __init__(self, mid, start):
             self.meeting_id = mid
             self.start = start
+            self.location = "Stadium"
 
     class _T:
         key = "t1"
         address = "611 Historic Nature Trail"
+        check_out = None
         span_start = datetime(2020, 8, 14, tzinfo=timezone.utc)
         span_end = datetime(2020, 8, 16, tzinfo=timezone.utc)
 
@@ -861,7 +863,9 @@ def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
         _M("middle", datetime(2020, 8, 15, 2, tzinfo=timezone.utc)),
         _M("offtrip", datetime(2020, 8, 30, 12, tzinfo=timezone.utc)),
     ]
-    presence = reconcile_sweep._trip_presence([_T()], meetings)
+    presence = reconcile_sweep._trip_presence(
+        [_T()], meetings, route=lambda o, d: timedelta(minutes=15)
+    )
 
     assert set(presence) == {"early", "middle", "late"}
     assert (presence["early"].is_first, presence["early"].is_last) == (True, False)
@@ -871,4 +875,85 @@ def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
 
 
 def test_trip_presence_is_empty_without_a_driving_trip():
-    assert reconcile_sweep._trip_presence([], []) == {}
+    assert reconcile_sweep._trip_presence([], [], route=lambda o, d: timedelta(minutes=5)) == {}
+
+
+class _PresenceTrip:
+    """A DriveTrip stand-in carrying only what `_trip_presence` reads."""
+
+    def __init__(self, key, address, start_day=14, end_day=16):
+        self.key = key
+        self.address = address
+        self.check_out = None
+        self.span_start = datetime(2020, 8, start_day, tzinfo=timezone.utc)
+        self.span_end = datetime(2020, 8, end_day, tzinfo=timezone.utc)
+
+
+class _PresenceMeeting:
+    def __init__(self, mid, start, location="Stadium"):
+        self.meeting_id = mid
+        self.start = start
+        self.location = location
+
+
+def _distance_route(table):
+    return lambda origin, destination: table.get(origin)
+
+
+def test_overlapping_trips_give_the_meeting_to_the_nearer_lodging():
+    """Both trips reach it; iteration order must not decide which claims it."""
+    near = _PresenceTrip("near", "Near Hotel")
+    far = _PresenceTrip("far", "Far Hotel")
+    meeting = _PresenceMeeting("m", datetime(2020, 8, 15, 18, tzinfo=timezone.utc))
+    route = _distance_route(
+        {"Near Hotel": timedelta(minutes=10), "Far Hotel": timedelta(minutes=90)}
+    )
+
+    for order in ([near, far], [far, near]):
+        presence = reconcile_sweep._trip_presence(order, [meeting], route=route)
+        assert presence["m"].lodging == "Near Hotel"
+        assert (presence["m"].is_first, presence["m"].is_last) == (True, True)
+
+
+def test_an_exact_tie_between_overlapping_trips_claims_nothing():
+    """Declining is the safe direction: membership only ever grants the
+    away-suppression exemption, so an unresolvable claim withholds it."""
+    a = _PresenceTrip("a", "Hotel A")
+    b = _PresenceTrip("b", "Hotel B")
+    meeting = _PresenceMeeting("m", datetime(2020, 8, 15, 18, tzinfo=timezone.utc))
+    route = _distance_route({"Hotel A": timedelta(minutes=20), "Hotel B": timedelta(minutes=20)})
+
+    assert reconcile_sweep._trip_presence([a, b], [meeting], route=route) == {}
+    assert reconcile_sweep._trip_presence([b, a], [meeting], route=route) == {}
+
+
+def test_overlapping_trips_keep_their_own_first_and_last_flags():
+    """Each trip's flags are computed over the meetings it actually won, not
+    over everything that fell on its dates."""
+    near = _PresenceTrip("near", "Near Hotel")
+    far = _PresenceTrip("far", "Far Hotel")
+    shared = _PresenceMeeting("shared", datetime(2020, 8, 15, 18, tzinfo=timezone.utc))
+    near_only = _PresenceMeeting(
+        "near-only", datetime(2020, 8, 14, 9, tzinfo=timezone.utc), location="Near Venue"
+    )
+    far_only = _PresenceMeeting(
+        "far-only", datetime(2020, 8, 16, 9, tzinfo=timezone.utc), location="Far Venue"
+    )
+
+    def route(origin, destination):
+        if destination == "Near Venue":
+            return timedelta(minutes=5) if origin == "Near Hotel" else None
+        if destination == "Far Venue":
+            return timedelta(minutes=5) if origin == "Far Hotel" else None
+        return timedelta(minutes=10) if origin == "Near Hotel" else timedelta(minutes=90)
+
+    presence = reconcile_sweep._trip_presence(
+        [near, far], [shared, near_only, far_only], route=route
+    )
+    # `near` won two meetings: the early one is first, the shared one is last.
+    assert (presence["near-only"].is_first, presence["near-only"].is_last) == (True, False)
+    assert (presence["shared"].is_first, presence["shared"].is_last) == (False, True)
+    assert presence["shared"].lodging == "Near Hotel"
+    # `far` won one, so it is both.
+    assert (presence["far-only"].is_first, presence["far-only"].is_last) == (True, True)
+    assert presence["far-only"].lodging == "Far Hotel"

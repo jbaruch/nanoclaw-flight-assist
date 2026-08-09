@@ -55,7 +55,7 @@ from lodging_source import (  # noqa: E402
     driving_trips,
     find_drive_trips,
     lodging_desired_blocks,
-    meeting_ids_within,
+    meetings_on_trip,
 )
 from meeting_source import (  # noqa: E402
     TripPresence,
@@ -740,21 +740,39 @@ def _persist_static_facts_best_effort(static_facts: dict[int, StaticAirport]) ->
         )
 
 
-def _trip_presence(driving: list, meetings: list) -> dict[str, TripPresence]:
+def _trip_presence(driving: list, meetings: list, *, route: RouteFn) -> dict[str, TripPresence]:
     """Where the operator sleeps for each meeting on a trip they drive to.
 
     Keyed by meeting id, for `meeting_desired_blocks`. First / last are decided
     per trip over that trip's own meetings, ordered by start — those are the two
     events where a home endpoint is real rather than a stale anchor (#242).
+
+    Membership is `lodging_source.meetings_on_trip`, which needs the router: an
+    event belongs to a trip by being reachable from its lodging, not merely by
+    falling on its dates (#243 review).
+
+    Two overlapping trips can both reach one meeting. The nearer lodging takes
+    it — that is where the operator would set off from — and an exact tie is
+    declined rather than broken by iteration order, which would make the chosen
+    lodging and the first/last flags depend on trip ordering (#245 review).
     """
+    claims: dict[str, list[tuple[timedelta, object]]] = {}
+    for trip in driving:
+        for meeting_id, drive in meetings_on_trip(trip, meetings, route=route).items():
+            claims.setdefault(meeting_id, []).append((drive, trip))
+
+    owner: dict[str, object] = {}
+    for meeting_id, candidates in claims.items():
+        # Sort on the drive alone: the trips themselves are not orderable, and a
+        # stable sort keeps equal drives adjacent for the tie check below.
+        candidates.sort(key=lambda candidate: candidate[0])
+        if len(candidates) == 1 or candidates[0][0] < candidates[1][0]:
+            owner[meeting_id] = candidates[0][1]
+
     presence: dict[str, TripPresence] = {}
     for trip in driving:
         on_trip = sorted(
-            (
-                meeting
-                for meeting in meetings
-                if meeting.meeting_id in meeting_ids_within([trip], [meeting])
-            ),
+            (meeting for meeting in meetings if owner.get(meeting.meeting_id) is trip),
             key=lambda meeting: meeting.start,
         )
         for index, meeting in enumerate(on_trip):
@@ -773,6 +791,7 @@ def _plan_lodging_legs(
     route: RouteFn,
     now: datetime,
     meeting_blocks: list[DesiredBlock],
+    verdicts: dict | None = None,
 ) -> tuple[list[DesiredBlock], list[str], list[str], list[DesiredBlock]]:
     """Plan the getting-there legs of every flight-less trip. The I/O half.
 
@@ -800,7 +819,8 @@ def _plan_lodging_legs(
     if not trips:
         return [], [], [], meeting_blocks
 
-    verdicts = load_verdicts(now)
+    if verdicts is None:
+        verdicts = load_verdicts(now)
     blocks, skipped, plans = lodging_desired_blocks(
         trips,
         route=route,
@@ -923,6 +943,9 @@ def _run_sweep() -> dict:
     # rather than letting scan raise and take the airport side down with it — the
     # whole cycle must not be DOA over a missing home.
     meeting_blocks: list[DesiredBlock] = []
+    # Bound before the home guard: the lodging side reads it either way, and a
+    # conditional-expression short-circuit is too subtle to rely on.
+    sweep_verdicts: dict | None = None
     meeting_skipped: list[str] = []
     if home:
         fetcher = CalendarFetcher()
@@ -957,16 +980,21 @@ def _run_sweep() -> dict:
         # check-in stamped after the first event the anchor resolves home, the
         # getting-there drive routes home→venue at its true length, and the cap
         # would delete the event the trip exists for (#242).
+        # One read of the verdict store per sweep, shared by both sides: the
+        # meeting side decides which trips are drives, the lodging side plans
+        # them. Two reads straddling the store's own prune could disagree about
+        # an operator answer within one sweep (#243 review).
+        sweep_verdicts = load_verdicts(now)
         driving = driving_trips(
             find_drive_trips(schedule, now=now, window=SWEEP_WINDOW),
             route=route,
             home_address=home,
-            verdicts=load_verdicts(now),
+            verdicts=sweep_verdicts,
         )
         meeting_blocks, meeting_skipped = meeting_desired_blocks(
             meetings,
             route=route,
-            driving_to=_trip_presence(driving, meetings),
+            driving_to=_trip_presence(driving, meetings, route=route),
         )
     else:
         meeting_skipped = [
@@ -984,6 +1012,7 @@ def _run_sweep() -> dict:
         route=route,
         now=now,
         meeting_blocks=meeting_blocks,
+        verdicts=sweep_verdicts,
     )
 
     # --- airport facts ---

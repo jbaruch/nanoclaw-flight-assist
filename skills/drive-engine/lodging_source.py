@@ -85,6 +85,18 @@ RouteFn = Callable[[str, str], "timedelta | None"]
 DRIVE_CERTAIN_MAX = timedelta(hours=3)
 DRIVE_IMPLAUSIBLE_MIN = timedelta(hours=7)
 
+# How far from the lodging an event can be and still be part of THAT trip.
+#
+# A third constant at three hours, and a third meaning — kept apart from the
+# two above for the reason their own comment gives. `DRIVE_CERTAIN_MAX` is "a
+# drive short enough that the operator is certainly driving to this trip";
+# `meeting_source.DEFAULT_MAX_REASONABLE_DRIVE` is "a drive so long the
+# operator cannot be positioned to make it"; this is "an event near enough the
+# hotel to be part of this stay". Generous on purpose: excluding a genuine trip
+# event costs a suppressed drive, and the alternative reading (every meeting on
+# these dates belongs to the trip) is what #243 got wrong.
+LOCAL_TO_LODGING_MAX = timedelta(hours=3)
+
 # How long a trip's verdict outlives the trip itself, so a verdict recorded for
 # a trip still under way is not pruned out from under the return leg.
 VERDICT_GRACE = timedelta(days=2)
@@ -367,24 +379,46 @@ def driving_trips(
     return driving
 
 
-def meeting_ids_within(trips: list[DriveTrip], meetings: list) -> frozenset[str]:
-    """The ids of `meetings` falling inside any of `trips`, compared on DATES.
+def meetings_on_trip(trip: DriveTrip, meetings: list, *, route: RouteFn) -> dict[str, timedelta]:
+    """`meetings` belonging to `trip`, as id → drive from its lodging.
+
+    Membership is dates AND reachability. The drive itself is returned, not
+    just the id, so a caller holding overlapping trips can settle which one a
+    meeting belongs to instead of letting iteration order decide (#245).
+
+    Dates alone are not evidence of belonging. Every meeting occurring while a
+    trip is under way would qualify, including a home appointment the operator
+    never cancelled and a meeting belonging to an overlapping trip. Those then
+    bypass the implausible-drive suppression and have their endpoints rewritten
+    to this trip's lodging — reintroducing the invented cross-country drive
+    that suppression exists to prevent.
+
+    So a meeting belongs when it is also REACHABLE from the trip's lodging: a
+    local drive, under `LOCAL_TO_LODGING_MAX`. The venue is where the operator
+    would actually go from that hotel, which is the question `TripPresence`
+    needs answered. A meeting with no parsed start, no id, no location, or an
+    unroutable one belongs to no trip — the conservative reading, since the
+    only thing membership grants is an exemption.
 
     Date comparison for the reason `_in_span` gives: the Trip wrapper is
     date-only, so an instant comparison drops the final day's evening events.
-    A meeting with no parsed start belongs to no trip.
+    The upper bound matches `context_from_blocks` — a stay recorded past the
+    wrapper's end extends it.
     """
-    ids: set[str] = set()
+    last_day = max(trip.span_end, trip.check_out) if trip.check_out else trip.span_end
+    reachable: dict[str, timedelta] = {}
     for meeting in meetings:
         start = getattr(meeting, "start", None)
         meeting_id = getattr(meeting, "meeting_id", None)
-        if start is None or not meeting_id:
+        location = getattr(meeting, "location", None)
+        if start is None or not meeting_id or not location:
             continue
-        for trip in trips:
-            if trip.span_start.date() <= start.date() <= trip.span_end.date():
-                ids.add(meeting_id)
-                break
-    return frozenset(ids)
+        if not (trip.span_start.date() <= start.date() <= last_day.date()):
+            continue
+        local = route(trip.address, location)
+        if local is not None and local <= LOCAL_TO_LODGING_MAX:
+            reachable[meeting_id] = local
+    return reachable
 
 
 def classify_drive(drive: timedelta) -> str:
