@@ -1,5 +1,21 @@
 # Changelog
 
+### Added — ExpertFlyer skill: check-before-alert for seats and upgrade inventory (#229)
+
+Adds the `expertflyer` skill covering the two capabilities the operator scoped: create a seat alert on request, and check fare-class inventory (Z) on a named SkyTeam partner flight for an upgrade certificate.
+
+Every alert request is **check first, alert only if absent**. An alert for something already bookable is worse than useless — it delays the booking while the operator waits for an email describing space they could have taken on the spot. Both actions report the check either way, so it is visible why no alert was set.
+
+The seat-map semantics are the reason this needs encoding rather than describing. The legend carries two orthogonal axes — state (available / occupied / blocked) and decoration (wing, exit row, paid, premium, accessible, selected, highlighted) — and a grey wing-shaded cell with no occupant is bookable. A first pass read grey as unavailable and reported a full Comfort+ cabin on DL2957 ATL–YYZ while 13B and 14B were open on delta.com. `classify_seat()` now classifies on the state axis only and raises on an unrecognised mark rather than filing it under decoration, since a new mark could be a new state.
+
+Cabin resolution is likewise explicit: premium economy is Delta's **Premium Select** (`A`), a different cabin from Comfort+ (`W`). `cabin_code()` owns the alias table and raises on anything unrecognised rather than defaulting to economy, because a silent wrong-cabin search returns plausible-looking seats the operator cannot book.
+
+Inventory reads `Z0` as an answer (the bucket exists and is empty), treats `9` as a display cap meaning *at least* nine, and requires resolving marketing → operating carrier before querying — the same split byAir has between `list_trips` and `get_flight`.
+
+Spike findings behind the design, verified against the live account 2026-08-09: stealth is mandatory (vanilla headless Playwright gets HTTP 403 on every request including unauthenticated ones, so a 403 says nothing about the session — `create_stealth_context()` from `jbaruch/fifty-tabs-of-fares` clears it); the results pages are fully parameterized so no search form needs driving; a flight-number-only request needs a `/air/status/results` hop to resolve the route. Validated: KL642 JFK–AMS 08/31 is `Z0` while KL646 the same evening has `Z1`.
+
+Auth is Auth0 OIDC + PKCE with a ~7-day `__session__0`/`__session__1` pair. OneCLI cannot carry it — its generic-secret injection covers header, query param and URL path, not request bodies — so the login step can never be gateway-mediated. Choosing between an in-container password and host-side session capture is still open, and gates the browser layer.
+
 ## 0.2.96 — 2026-08-09
 
 ### Changed — an unanswered drive-or-fly question is nudged daily instead of asked once (#240)
