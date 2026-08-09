@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.91 — 2026-08-09
+
 ### Changed — drive-time alerts need to be imminent and worth acting on
 
 "Leave 4 minutes earlier" for a drive two months out was reaching the operator. Two gates were missing, and the alert fired on a percentage alone.
