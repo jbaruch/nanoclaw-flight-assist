@@ -19,7 +19,11 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "travel-core"))
 sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
 from block_codec import build_extended_properties  # noqa: E402
-from meeting_source import exclude_drive_block_events, meeting_desired_blocks  # noqa: E402
+from meeting_source import (  # noqa: E402
+    TripPresence,
+    exclude_drive_block_events,
+    meeting_desired_blocks,
+)
 
 UTC = timezone.utc
 
@@ -232,3 +236,106 @@ def test_exclude_keeps_legacy_dp_blocks_for_scan_has_block():
     assert "dp1" in kept  # dp kept — scan needs it
     assert "de1" not in kept  # dengine dropped — no self-ingestion
     assert "m1" in kept
+
+
+# --- trips the operator drives to (#242) ------------------------------------
+
+
+HOME_ADDR = "12 Example St, Sampleton"
+LODGING = "611 Historic Nature Trail Gatlinburg"
+VENUE = "Rocky Top Sports World"
+
+
+def _pair_route(pairs):
+    return lambda o, d: pairs.get((o, d))
+
+
+def test_away_suppression_still_fires_for_a_meeting_off_any_trip():
+    meeting = FakeMeeting(
+        "m1", "Swim practice", (FakeLeg("outbound", HOME_ADDR, VENUE, arrive_by=_dt(20)),)
+    )
+    blocks, skipped = meeting_desired_blocks([meeting], route=const_route(234))
+    assert blocks == []
+    assert any("implausible" in note for note in skipped)
+
+
+def test_away_suppression_spared_for_a_trip_the_operator_drives_to():
+    """The cap means "not positioned to drive it — they flew, or are elsewhere".
+    On a confirmed drive trip that premise is false, and suppressing deleted the
+    event the trip exists for."""
+    meeting = FakeMeeting(
+        "m1", "Opening Ceremony", (FakeLeg("outbound", HOME_ADDR, VENUE, arrive_by=_dt(20)),)
+    )
+    blocks, skipped = meeting_desired_blocks(
+        [meeting],
+        route=const_route(234),
+        driving_to={"m1": TripPresence(lodging=LODGING, is_first=True, is_last=False)},
+    )
+    assert [b.origin for b in blocks] == [HOME_ADDR]
+    assert [b.destination for b in blocks] == [VENUE]
+    assert skipped == []
+
+
+def test_the_drive_back_from_a_mid_trip_event_goes_to_the_lodging_not_home():
+    """`scan` resolves one anchor per meeting at the event's start, so a check-in
+    stamped after the first event made that event's return leg drive home — out
+    of the middle of a trip."""
+    meeting = FakeMeeting(
+        "m1", "Opening Ceremony", (FakeLeg("return", VENUE, HOME_ADDR, depart_after=_dt(22)),)
+    )
+    routes = _pair_route(
+        {(VENUE, LODGING): timedelta(minutes=13), (VENUE, HOME_ADDR): timedelta(minutes=234)}
+    )
+    blocks, _skipped = meeting_desired_blocks(
+        [meeting],
+        route=routes,
+        driving_to={"m1": TripPresence(lodging=LODGING, is_first=True, is_last=False)},
+    )
+    assert [(b.origin, b.destination) for b in blocks] == [(VENUE, LODGING)]
+    assert blocks[0].end - blocks[0].start == timedelta(minutes=13)
+
+
+def test_the_drive_back_from_the_last_event_keeps_home():
+    """`lodging_source` owns the drive home; this leg deferring to it keeps one
+    owner for the way back."""
+    meeting = FakeMeeting(
+        "m1", "Final game", (FakeLeg("return", VENUE, HOME_ADDR, depart_after=_dt(22)),)
+    )
+    routes = _pair_route(
+        {(VENUE, LODGING): timedelta(minutes=13), (VENUE, HOME_ADDR): timedelta(minutes=234)}
+    )
+    blocks, _skipped = meeting_desired_blocks(
+        [meeting],
+        route=routes,
+        driving_to={"m1": TripPresence(lodging=LODGING, is_first=False, is_last=True)},
+    )
+    assert [(b.origin, b.destination) for b in blocks] == [(VENUE, HOME_ADDR)]
+
+
+def test_the_drive_out_to_a_later_event_starts_from_the_lodging():
+    meeting = FakeMeeting("m2", "Game", (FakeLeg("outbound", HOME_ADDR, VENUE, arrive_by=_dt(18)),))
+    routes = _pair_route(
+        {(LODGING, VENUE): timedelta(minutes=13), (HOME_ADDR, VENUE): timedelta(minutes=234)}
+    )
+    blocks, _skipped = meeting_desired_blocks(
+        [meeting],
+        route=routes,
+        driving_to={"m2": TripPresence(lodging=LODGING, is_first=False, is_last=True)},
+    )
+    assert [(b.origin, b.destination) for b in blocks] == [(LODGING, VENUE)]
+
+
+def test_the_drive_out_to_the_first_event_keeps_home():
+    """They really do set off from the house."""
+    meeting = FakeMeeting(
+        "m1", "Opening Ceremony", (FakeLeg("outbound", HOME_ADDR, VENUE, arrive_by=_dt(20)),)
+    )
+    routes = _pair_route(
+        {(LODGING, VENUE): timedelta(minutes=13), (HOME_ADDR, VENUE): timedelta(minutes=234)}
+    )
+    blocks, _skipped = meeting_desired_blocks(
+        [meeting],
+        route=routes,
+        driving_to={"m1": TripPresence(lodging=LODGING, is_first=True, is_last=False)},
+    )
+    assert [(b.origin, b.destination) for b in blocks] == [(HOME_ADDR, VENUE)]

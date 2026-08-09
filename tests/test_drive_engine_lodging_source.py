@@ -38,8 +38,10 @@ from lodging_source import (  # noqa: E402
     TripContext,
     classify_drive,
     context_from_blocks,
+    driving_trips,
     find_drive_trips,
     lodging_desired_blocks,
+    meeting_ids_within,
 )
 from reconcile import DesiredBlock  # noqa: E402
 
@@ -704,3 +706,168 @@ def test_an_orphan_checkin_with_no_local_drives_plans_no_return():
     blocks, skipped, _plans = _plan(_orphan_schedule(), drive=timedelta(hours=2))
     assert [b.kind for b in blocks] == [KIND_OUTBOUND]
     assert any("no check-out to depart after" in s for s in skipped)
+
+
+# ---------------------------------------------------------------------------
+# The plan must not depend on where the check-in stamp sits (#242)
+# ---------------------------------------------------------------------------
+
+
+def _venue_leg(name, kind, start, end, origin, destination):
+    return DesiredBlock(
+        identity=name,
+        kind=kind,
+        summary="Drive: Ceremony" if name.startswith("cer") else "Drive: Game",
+        start=start,
+        end=end,
+        origin=origin,
+        destination=destination,
+        baseline_seconds=int((end - start).total_seconds()),
+        anchor=start if kind.endswith("return") else end,
+        timezone="America/New_York",
+    )
+
+
+def _two_event_blocks(first_out_origin):
+    """The four local drives of a two-event trip.
+
+    `first_out_origin` is where the first event's outbound starts — the hotel
+    when check-in precedes it, home when the operator has not checked in yet.
+    Everything else is identical, which is the point of the test.
+    """
+    return [
+        _venue_leg(
+            "cer-out",
+            "meeting_outbound",
+            CHECK_IN + timedelta(hours=3),
+            CHECK_IN + timedelta(hours=4),
+            first_out_origin,
+            "Stadium",
+        ),
+        _venue_leg(
+            "cer-back",
+            "meeting_return",
+            CHECK_IN + timedelta(hours=6),
+            CHECK_IN + timedelta(hours=7),
+            "Stadium",
+            HOTEL_ADDRESS,
+        ),
+        _venue_leg(
+            "game-out",
+            "meeting_outbound",
+            CHECK_OUT + timedelta(hours=6),
+            CHECK_OUT + timedelta(hours=7),
+            HOTEL_ADDRESS,
+            "Stadium",
+        ),
+        _venue_leg(
+            "game-back",
+            "meeting_return",
+            CHECK_OUT + timedelta(hours=11),
+            CHECK_OUT + timedelta(hours=12),
+            "Stadium",
+            HOTEL_ADDRESS,
+        ),
+    ]
+
+
+def _outer_legs(check_in, blocks):
+    schedule = [
+        _trip_record(),
+        _lodging("in", check_in),
+        _lodging("out", CHECK_OUT),
+    ]
+    trips = find_drive_trips(schedule, now=NOW, window=timedelta(days=30))
+    ctx = context_from_blocks(trips, blocks)[TRIP_KEY]
+    out, _skipped, plans = lodging_desired_blocks(
+        trips,
+        route=_venue_router(
+            home_hotel=timedelta(hours=2),
+            home_venue=timedelta(hours=3),
+            hotel_home=timedelta(hours=2),
+            venue_home=timedelta(hours=3),
+        ),
+        home_address=HOME,
+        verdicts={},
+        contexts={TRIP_KEY: ctx},
+        now=NOW,
+    )
+    return [(b.kind, b.start, b.end, b.origin, b.destination) for b in out], plans[0].subsumed
+
+
+def test_outer_legs_are_identical_whether_check_in_precedes_the_first_event():
+    """A check-in stamp is a fact about a reservation, not an instruction about
+    which drives count. Stamping it after the first event used to hide that
+    event's drives and re-anchor the outbound on the next day's."""
+    before, subsumed_before = _outer_legs(CHECK_IN, _two_event_blocks(HOTEL_ADDRESS))
+    after, subsumed_after = _outer_legs(CHECK_IN + timedelta(hours=6), _two_event_blocks(HOME))
+    assert before == after
+    assert subsumed_before == subsumed_after
+    # And it is the real plan, not two matching empties.
+    assert [kind for kind, *_ in before] == [KIND_OUTBOUND, KIND_RETURN]
+    assert before[0][4] == "Stadium"
+
+
+def test_a_home_errand_on_the_trips_first_morning_is_not_the_trips_first_leg():
+    """Widening the window to the trip's own span let non-trip drives in. Only
+    drives touching a venue the trip's lodging-anchored drives reach count."""
+    errand = _venue_leg(
+        "errand",
+        "meeting_outbound",
+        CHECK_IN - timedelta(hours=5),
+        CHECK_IN - timedelta(hours=4),
+        HOME,
+        "Dentist",
+    )
+    legs, _subsumed = _outer_legs(CHECK_IN, [*_two_event_blocks(HOTEL_ADDRESS), errand])
+    baseline, _ = _outer_legs(CHECK_IN, _two_event_blocks(HOTEL_ADDRESS))
+    assert legs == baseline
+
+
+def test_driving_trips_reports_only_the_trips_with_a_drive_verdict():
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    short = _router(out=timedelta(hours=1))
+    assert [t.key for t in driving_trips(trips, route=short, home_address=HOME, verdicts={})] == [
+        TRIP_KEY
+    ]
+    long_haul = _router(out=DRIVE_IMPLAUSIBLE_MIN + timedelta(hours=1))
+    assert driving_trips(trips, route=long_haul, home_address=HOME, verdicts={}) == []
+    ambiguous = _router(out=DRIVE_CERTAIN_MAX + timedelta(minutes=30))
+    assert driving_trips(trips, route=ambiguous, home_address=HOME, verdicts={}) == []
+    answered = {
+        TRIP_KEY: TripVerdict(
+            verdict=VERDICT_DRIVE,
+            decided_by=DECIDED_BY_OPERATOR,
+            drive_seconds=1,
+            asked_at=None,
+            expires=CHECK_OUT + timedelta(days=1),
+        )
+    }
+    assert [
+        t.key for t in driving_trips(trips, route=ambiguous, home_address=HOME, verdicts=answered)
+    ] == [TRIP_KEY]
+
+
+def test_driving_trips_does_not_claim_a_trip_whose_route_failed():
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    assert driving_trips(trips, route=lambda o, d: None, home_address=HOME, verdicts={}) == []
+    assert (
+        driving_trips(trips, route=_router(out=timedelta(hours=1)), home_address=None, verdicts={})
+        == []
+    )
+
+
+def test_meeting_ids_within_compares_dates_so_the_last_evening_counts():
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+
+    class _M:
+        def __init__(self, mid, start):
+            self.meeting_id = mid
+            self.start = start
+
+    # The wrapper ends 2020-08-16 00:00; an event that evening is still on it.
+    late = _M("late", datetime(2020, 8, 16, 23, 0, tzinfo=UTC))
+    early = _M("early", datetime(2020, 8, 14, 1, 0, tzinfo=UTC))
+    off = _M("off", datetime(2020, 8, 20, 12, 0, tzinfo=UTC))
+    undated = _M("undated", None)
+    assert meeting_ids_within(trips, [late, early, off, undated]) == frozenset({"late", "early"})
