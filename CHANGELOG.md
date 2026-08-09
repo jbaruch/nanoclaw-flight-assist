@@ -1,5 +1,15 @@
 # Changelog
 
+### Fixed — a meeting belongs to a trip by being reachable from it, not by falling on its dates (#243 review)
+
+The `TripPresence` matching shipped in #243 used date containment alone, so every meeting occurring while a driving trip was under way was claimed by that trip. Two consequences, both bad: an unrelated appointment — a home meeting never cancelled, or a meeting belonging to an overlapping trip — was exempted from the implausible-drive suppression and given a cross-country drive block, which is precisely the invented "drive to Tennessee swim practice while in Europe" that suppression exists to prevent; and its endpoints were rewritten to the wrong trip's lodging.
+
+`meeting_ids_within` becomes `meetings_on_trip`, which additionally requires the venue to be within `LOCAL_TO_LODGING_MAX` of that trip's lodging. A meeting with no location, or an unroutable one, belongs to no trip — membership only ever grants an exemption, so the unknown case declines it. The upper bound now matches `context_from_blocks`, so a stay recorded past the wrapper's end extends both alike.
+
+**Bridge legs keep their prior-venue origin.** `_trip_endpoints` rewrote the origin of every non-`return` leg, and `_DIRECTION_KIND` maps `bridge` onto `meeting_outbound`. A bridge leg runs venue to venue between two tight-gap meetings, so rewriting its origin invented a detour through the hotel between back-to-back events. It now matches `outbound` explicitly.
+
+**One verdict-store read per sweep.** The meeting side loaded verdicts to decide which trips are drives and the lodging side loaded them again to plan those trips, straddling the store's own prune — two reads that could disagree about an operator answer inside a single sweep.
+
 ## 0.2.94 — 2026-08-09
 
 ### Fixed — the check-in stamp no longer decides which drives exist (#242)

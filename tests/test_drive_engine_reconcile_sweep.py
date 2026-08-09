@@ -848,10 +848,12 @@ def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
         def __init__(self, mid, start):
             self.meeting_id = mid
             self.start = start
+            self.location = "Stadium"
 
     class _T:
         key = "t1"
         address = "611 Historic Nature Trail"
+        check_out = None
         span_start = datetime(2020, 8, 14, tzinfo=timezone.utc)
         span_end = datetime(2020, 8, 16, tzinfo=timezone.utc)
 
@@ -861,7 +863,9 @@ def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
         _M("middle", datetime(2020, 8, 15, 2, tzinfo=timezone.utc)),
         _M("offtrip", datetime(2020, 8, 30, 12, tzinfo=timezone.utc)),
     ]
-    presence = reconcile_sweep._trip_presence([_T()], meetings)
+    presence = reconcile_sweep._trip_presence(
+        [_T()], meetings, route=lambda o, d: timedelta(minutes=15)
+    )
 
     assert set(presence) == {"early", "middle", "late"}
     assert (presence["early"].is_first, presence["early"].is_last) == (True, False)
@@ -871,4 +875,4 @@ def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
 
 
 def test_trip_presence_is_empty_without_a_driving_trip():
-    assert reconcile_sweep._trip_presence([], []) == {}
+    assert reconcile_sweep._trip_presence([], [], route=lambda o, d: timedelta(minutes=5)) == {}

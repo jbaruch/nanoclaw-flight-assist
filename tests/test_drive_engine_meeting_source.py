@@ -339,3 +339,23 @@ def test_the_drive_out_to_the_first_event_keeps_home():
         driving_to={"m1": TripPresence(lodging=LODGING, is_first=True, is_last=False)},
     )
     assert [(b.origin, b.destination) for b in blocks] == [(HOME_ADDR, VENUE)]
+
+
+def test_a_bridge_leg_keeps_its_prior_venue_origin_on_a_driving_trip():
+    """A bridge leg runs venue→venue between two tight-gap meetings; its origin
+    is the prior venue, not the anchor. Rewriting it to the lodging invents a
+    detour through the hotel between back-to-back events."""
+    meeting = FakeMeeting(
+        "m2",
+        "Second session",
+        (FakeLeg("bridge", "Prior Venue", VENUE, arrive_by=_dt(15), gap_seconds=3600),),
+    )
+    routes = _pair_route(
+        {("Prior Venue", VENUE): timedelta(minutes=20), (LODGING, VENUE): timedelta(minutes=13)}
+    )
+    blocks, _skipped = meeting_desired_blocks(
+        [meeting],
+        route=routes,
+        driving_to={"m2": TripPresence(lodging=LODGING, is_first=False, is_last=False)},
+    )
+    assert [(b.origin, b.destination) for b in blocks] == [("Prior Venue", VENUE)]
