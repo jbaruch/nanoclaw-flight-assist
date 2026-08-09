@@ -1,5 +1,15 @@
 # Changelog
 
+### Changed — the outer legs no longer route through a hotel the operator drives straight past (#231 follow-up)
+
+The outbound landed at the lodging at the exact instant the first local drive left it. Zero dwell — arriving and departing together, a stop made only to leave again. On the live Gatlinburg trip that read as "drive 3h50m to the hotel, then immediately drive to the ceremony."
+
+When the trip's first local drive LEAVES the lodging, the outbound now goes straight to that venue and absorbs the local leg. The operator reaches the hotel on the event's own return drive, checking in when they actually do. The return mirrors it: a last local drive back to a lodging already checked out of is absorbed, and the drive home departs the venue rather than doubling back to a released room.
+
+Both absorptions ride on `TripPlan.subsumed`, and `_plan_lodging_legs` now returns the meeting side with those blocks removed. Reconciling both halves would put two drives on the calendar for one journey and strand the absorbed one there. A failed direct route degrades to the old via-the-lodging shape rather than dropping the leg.
+
+Moving the TripIt check-in stamp is NOT a workaround for the old shape — `context_from_blocks` counts only drives anchored at or after check-in, so pushing check-in past the first event drops that event's drives from the window and re-anchors the outbound on the NEXT day's. The engine now handles the nominal check-in correctly and the stamp is best left alone.
+
 ### Fixed — the drive home no longer leaves before the last day's event (#231 follow-up)
 
 The return leg of a flight-less trip departed at hotel check-out, stranding the operator: on the live Gatlinburg trip it drove home Aug 15 11:00 EDT and landed at 14:50, while the calendar still had a 17:47 drive from that hotel to a 18:00 game and a 22:00 drive back to it.

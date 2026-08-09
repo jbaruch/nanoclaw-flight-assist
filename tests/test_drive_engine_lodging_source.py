@@ -387,7 +387,167 @@ def test_context_counts_a_local_drive_after_check_out():
     assert ctx.trailing_end == evening_back.end
 
     blocks, _skipped, _plans = _plan(drive=timedelta(hours=2), contexts={TRIP_KEY: ctx})
-    assert blocks[1].start == evening_back.end
+    # Departs the STADIUM as that last drive would have set off, not the hotel
+    # when it would have arrived: the room is already released, so the drive
+    # back to it is absorbed. What this test pins either way is that the return
+    # is not planned at check-out, hours before the event.
+    assert blocks[1].start == evening_back.start
+    assert blocks[1].start > CHECK_OUT
+
+
+def _local(name, kind, start, end, origin, destination, tz="America/New_York"):
+    return DesiredBlock(
+        identity=name,
+        kind=kind,
+        summary="Drive: Opening Ceremony" if "out" in name else "Drive: Game",
+        start=start,
+        end=end,
+        origin=origin,
+        destination=destination,
+        baseline_seconds=int((end - start).total_seconds()),
+        anchor=start if kind.endswith("return") else end,
+        timezone=tz,
+    )
+
+
+def _venue_router(*, home_hotel, home_venue, hotel_home, venue_home):
+    """Routes keyed on the pair, so a direct leg and a via-the-hotel leg differ."""
+
+    def route(origin, destination):
+        return {
+            (HOME, HOTEL_ADDRESS): home_hotel,
+            (HOME, "Stadium"): home_venue,
+            (HOTEL_ADDRESS, HOME): hotel_home,
+            ("Stadium", HOME): venue_home,
+        }.get((origin, destination))
+
+    return route
+
+
+def _plan_with_venue(local_blocks, **route_kw):
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    ctx = context_from_blocks(trips, local_blocks)[TRIP_KEY]
+    blocks, skipped, plans = lodging_desired_blocks(
+        trips,
+        route=_venue_router(**route_kw),
+        home_address=HOME,
+        verdicts={},
+        contexts={TRIP_KEY: ctx},
+        now=NOW,
+    )
+    return blocks, skipped, plans, ctx
+
+
+def test_outbound_drives_straight_to_the_venue_when_the_event_is_first():
+    """Landing at the hotel exactly as the hotel→venue drive departs is a stop
+    made only to leave it. Go to the venue and absorb that local drive."""
+    out = _local(
+        "mtg-out",
+        "meeting_outbound",
+        CHECK_IN + timedelta(hours=3),
+        CHECK_IN + timedelta(hours=4),
+        HOTEL_ADDRESS,
+        "Stadium",
+    )
+    blocks, _skipped, plans, ctx = _plan_with_venue(
+        [out],
+        home_hotel=timedelta(hours=2),
+        home_venue=timedelta(hours=2, minutes=30),
+        hotel_home=timedelta(hours=2),
+        venue_home=timedelta(hours=2, minutes=30),
+    )
+    assert ctx.first_out is not None and ctx.first_out.venue == "Stadium"
+    outbound = blocks[0]
+    assert outbound.destination == "Stadium"
+    assert outbound.end == out.end
+    assert outbound.start == out.end - timedelta(hours=2, minutes=30)
+    assert outbound.summary == "Drive: home → Opening Ceremony"
+    assert plans[0].subsumed == (("mtg-out", "meeting_outbound"),)
+
+
+def test_outbound_keeps_the_hotel_when_no_local_drive_leaves_it():
+    """Nothing to absorb — the trip's first commitment is the stay itself."""
+    blocks, _skipped, plans, _ctx = _plan_with_venue(
+        [],
+        home_hotel=timedelta(hours=2),
+        home_venue=timedelta(hours=3),
+        hotel_home=timedelta(hours=2),
+        venue_home=timedelta(hours=3),
+    )
+    assert blocks[0].destination == HOTEL_ADDRESS
+    assert blocks[0].end == CHECK_IN
+    assert plans[0].subsumed == ()
+
+
+def test_outbound_falls_back_to_the_hotel_when_the_venue_route_fails():
+    """A failed direct route degrades to the old shape rather than dropping the
+    leg, and the local drive it would have absorbed stays planned."""
+    out = _local(
+        "mtg-out",
+        "meeting_outbound",
+        CHECK_IN + timedelta(hours=3),
+        CHECK_IN + timedelta(hours=4),
+        HOTEL_ADDRESS,
+        "Stadium",
+    )
+    blocks, skipped, plans, _ctx = _plan_with_venue(
+        [out],
+        home_hotel=timedelta(hours=2),
+        home_venue=None,
+        hotel_home=timedelta(hours=2),
+        venue_home=timedelta(hours=2),
+    )
+    assert blocks[0].destination == HOTEL_ADDRESS
+    assert plans[0].subsumed == ()
+    assert any("route failed" in note for note in skipped)
+
+
+def test_return_departs_the_venue_when_the_room_is_already_released():
+    back = _local(
+        "mtg-back",
+        "meeting_return",
+        CHECK_OUT + timedelta(hours=8),
+        CHECK_OUT + timedelta(hours=9),
+        "Stadium",
+        HOTEL_ADDRESS,
+    )
+    blocks, _skipped, plans, ctx = _plan_with_venue(
+        [back],
+        home_hotel=timedelta(hours=2),
+        home_venue=timedelta(hours=2),
+        hotel_home=timedelta(hours=2),
+        venue_home=timedelta(hours=2, minutes=30),
+    )
+    assert ctx.last_back is not None and ctx.last_back.venue == "Stadium"
+    returning = blocks[-1]
+    assert returning.origin == "Stadium"
+    assert returning.start == back.start
+    assert returning.end == back.start + timedelta(hours=2, minutes=30)
+    assert ("mtg-back", "meeting_return") in plans[0].subsumed
+
+
+def test_return_still_goes_via_the_hotel_when_check_out_is_later():
+    """The room is still held, so the drive back to it is a real leg — collect
+    the bags, then leave."""
+    back = _local(
+        "mtg-back",
+        "meeting_return",
+        CHECK_OUT - timedelta(hours=6),
+        CHECK_OUT - timedelta(hours=5),
+        "Stadium",
+        HOTEL_ADDRESS,
+    )
+    blocks, _skipped, plans, _ctx = _plan_with_venue(
+        [back],
+        home_hotel=timedelta(hours=2),
+        home_venue=timedelta(hours=2),
+        hotel_home=timedelta(hours=2),
+        venue_home=timedelta(hours=2, minutes=30),
+    )
+    returning = blocks[-1]
+    assert returning.origin == HOTEL_ADDRESS
+    assert returning.start == CHECK_OUT
+    assert plans[0].subsumed == ()
 
 
 def test_context_ignores_blocks_anchored_after_the_trip_ends():
