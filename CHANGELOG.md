@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.96 — 2026-08-09
+
 ### Changed — an unanswered drive-or-fly question is nudged daily instead of asked once (#240)
 
 The engine asked once and stopped. `mark_asked` stamps `asked_at`, `needs_question` goes false, and nothing ever set it back — so a missed Telegram notice left the trip with no drive legs AND no alert, right through departure. That is what happened to the live Gatlinburg trip: the question went out, was missed, and the trip sat unplanned for five hours until the operator was asked again out of band.
