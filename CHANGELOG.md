@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.95 — 2026-08-09
+
 ### Fixed — a meeting belongs to a trip by being reachable from it, not by falling on its dates (#243 review)
 
 The `TripPresence` matching shipped in #243 used date containment alone, so every meeting occurring while a driving trip was under way was claimed by that trip. Two consequences, both bad: an unrelated appointment — a home meeting never cancelled, or a meeting belonging to an overlapping trip — was exempted from the implausible-drive suppression and given a cross-country drive block, which is precisely the invented "drive to Tennessee swim practice while in Europe" that suppression exists to prevent; and its endpoints were rewritten to the wrong trip's lodging.
