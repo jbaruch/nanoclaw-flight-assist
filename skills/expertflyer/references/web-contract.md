@@ -84,6 +84,50 @@ A flight-number-only request ("DL2957 on the 11th") needs a
 `/air/status/results` hop first — availability and seat map both require a city
 pair. That hop resolves the route and the scheduled times.
 
+## Structured payloads beat the rendered page
+
+Every results page ships its data as JSON inside the Next.js RSC payload. Read
+that; the rendered text is a trap.
+
+| Data | Key in payload | Shape |
+|---|---|---|
+| Seat map | `seatMap` | `sections[].rows[].seats[]` with `status`, `isWindow`/`isAisle`/`isMiddle`, `type` (`seat` or `aisle` gap) |
+| Fare-class inventory | `bookingClassAvailability` | `[{code, cabin, availability, hasAvailability}]`, preceded by `marketingAirlineCode` / `operatingAirlineCode` / `flightNumber` / `departureAirport` / `airEquipType` |
+| Account alerts | array starting `[{"alertType"` | `id`, `status`, `airlineCode`, `flightNumber`, `classCode`, `seatMapLocations`, `name` |
+
+Seat statuses observed: `available`, `occupied`. Non-seat cells have
+`type: "aisle"` and no `status`.
+
+Text scraping the availability grid pairs an aircraft code with the `AM`/`PM`
+of a departure time and invents flights like `PM787`. Parse the payload with a
+real JSON decoder — hand-rolled brace counting desynchronises on punctuation
+inside an alert name.
+
+## Alert creation and verification
+
+The seat-alert panel opens from the **Seat Alert** button on the seat-map
+results page. Its criteria checkboxes carry stable `value` attributes:
+
+| value | Label | Note |
+|---|---|---|
+| `ANY` | Any Seat | disabled on a single-cabin search |
+| `AISLE` | Any Aisle Seats | |
+| `WINDOW` | Any Window Seats | |
+| `EXIT` | Any Exit Row Seats | disabled when the cabin has no exit row |
+| `TWO_TOGETHER` | Any 2 Seats Together | |
+
+There is no middle-seat criterion — a middle is searchable but not alertable.
+`#alertName` prefills (e.g. `ATL to YYZ DL2957 8.11.26`) and **Create Alert**
+stays disabled until a criterion is ticked. Success shows a
+"Seat Alert created successfully!" toast.
+
+**Verify against the payload, never the alerts page text.** `/alerts` defaults
+to the **Flight Alerts** tab, which renders "No alerts found" even when seat
+alerts exist — reading that text reports a successful creation as a failure.
+Deleting uses the per-row `button[title="Delete Alert"]`, whose confirmation is
+a fixed overlay (`div.fixed.inset-0.z-50`) that intercepts clicks on anything
+behind it, so the confirm button must be located inside the overlay.
+
 ## DOM gotchas
 
 Only the alert-creation form still needs driving; these apply there.
