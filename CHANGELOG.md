@@ -12,6 +12,8 @@ The sweep's immediate one-shot ask stays. It reaches the operator within half an
 
 The nudge is bounded without a horizon of its own: an `unknown` verdict only exists for trips inside drive-engine's 14-day `SWEEP_WINDOW`, and the existing per-trip snooze still applies.
 
+## 0.2.94 — 2026-08-09
+
 ### Fixed — the check-in stamp no longer decides which drives exist (#242)
 
 Moving a hotel check-in past the trip's first event erased that event. On the live Gatlinburg trip, restamping check-in from 16:00 to 22:00 Friday deleted both of the opening ceremony's drives and re-anchored the outbound on Saturday afternoon — the operator drove down a day late and missed the thing he booked the hotel for. A check-in time is a fact about a reservation, not an instruction to the engine.
