@@ -741,12 +741,18 @@ def _plan_lodging_legs(
     route: RouteFn,
     now: datetime,
     meeting_blocks: list[DesiredBlock],
-) -> tuple[list[DesiredBlock], list[str], list[str]]:
+) -> tuple[list[DesiredBlock], list[str], list[str], list[DesiredBlock]]:
     """Plan the getting-there legs of every flight-less trip. The I/O half.
 
-    Returns `(blocks, skipped, questions)`. `lodging_source` decides; this
-    function supplies it the stored verdicts and writes back what it decided,
-    keeping the verdict-store reads and writes out of the pure module.
+    Returns `(blocks, skipped, questions, kept_meeting_blocks)`.
+    `lodging_source` decides; this function supplies it the stored verdicts and
+    writes back what it decided, keeping the verdict-store reads and writes out
+    of the pure module.
+
+    `kept_meeting_blocks` is the meeting side minus every local drive an outer
+    leg absorbed — the hotel→venue drive the operator never makes because the
+    outbound went straight to the venue. Reconciling both would plan two drives
+    for one journey and leave the absorbed one on the calendar forever.
 
     The ask is stamped here, as the question is handed to the payload rather
     than after the operator sees it — a notice the agent drops is a question
@@ -760,7 +766,7 @@ def _plan_lodging_legs(
 
     trips = find_drive_trips(schedule, now=now, window=SWEEP_WINDOW)
     if not trips:
-        return [], [], []
+        return [], [], [], meeting_blocks
 
     verdicts = load_verdicts(now)
     blocks, skipped, plans = lodging_desired_blocks(
@@ -773,6 +779,7 @@ def _plan_lodging_legs(
     )
 
     questions: list[str] = []
+    absorbed: set[tuple[str, str]] = set()
     for plan in plans:
         record_drive_time(
             plan.trip.key,
@@ -784,7 +791,12 @@ def _plan_lodging_legs(
         if plan.ask is not None:
             mark_asked(plan.trip.key, now=now)
             questions.append(plan.ask)
-    return blocks, skipped, questions
+        absorbed.update(plan.subsumed)
+
+    kept = [block for block in meeting_blocks if (block.identity, block.kind) not in absorbed]
+    for identity, kind in sorted(absorbed):
+        skipped.append(f"meeting {identity} {kind}: absorbed into the trip's own drive")
+    return blocks, skipped, questions, kept
 
 
 def _run_sweep() -> dict:
@@ -919,7 +931,7 @@ def _run_sweep() -> dict:
     # Runs after the meeting side because it reads the local drives already
     # planned: the outbound leg must land before the first of them leaves the
     # hotel, not merely by TripIt's nominal check-in stamp.
-    lodging_blocks, lodging_skipped, drive_or_fly_questions = _plan_lodging_legs(
+    lodging_blocks, lodging_skipped, drive_or_fly_questions, meeting_blocks = _plan_lodging_legs(
         schedule=schedule,
         home=home,
         route=route,

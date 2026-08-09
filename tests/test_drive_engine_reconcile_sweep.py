@@ -734,3 +734,108 @@ def test_live_branch_can_apply_without_a_write_budget(monkeypatch):
     spy = _ApplySpy()
     reconcile_sweep.finish_sweep(_shadow_plan(), [], calendar=object(), apply=spy)
     assert spy.calls[0][1]["budget_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
+# Lodging legs absorbing a local drive (#231 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _drive_trip_schedule():
+    """A flight-less trip with lodging, in `travel-schedule.json`'s own shape."""
+    return [
+        {
+            "type": "Trip",
+            "summary": "Tigers Weekend",
+            "start": "2020-08-14",
+            "end": "2020-08-16",
+            "location": "TN",
+        },
+        {
+            "type": "Lodging",
+            "summary": "Check-in: Fairfield Inn",
+            "start": "2020-08-14T20:00:00Z",
+            "end": "2020-08-14T21:00:00Z",
+            "location": "611 Historic Nature Trail Gatlinburg TN 37738 US",
+        },
+        {
+            "type": "Lodging",
+            "summary": "Check-out: Fairfield Inn",
+            "start": "2020-08-15T15:00:00Z",
+            "end": "2020-08-15T16:00:00Z",
+            "location": "611 Historic Nature Trail Gatlinburg TN 37738 US",
+        },
+    ]
+
+
+def test_plan_lodging_legs_drops_the_local_drive_the_outbound_absorbed(tmp_path, monkeypatch):
+    """The hotel→venue drive the outbound went straight past must not survive
+    into the reconcile input: planning both halves would put two drives on the
+    calendar for one journey."""
+    monkeypatch.setenv("DRIVE_PLANNER_STATE_DIR", str(tmp_path))
+    hotel = "611 Historic Nature Trail Gatlinburg TN 37738 US"
+    home = "12 Example St, Sampleton, TN 37000"
+    stadium = "Stadium"
+    local = DesiredBlock(
+        identity="mtg-1",
+        kind="meeting_outbound",
+        summary="Drive: Opening Ceremony",
+        start=datetime(2020, 8, 14, 23, 0, tzinfo=timezone.utc),
+        end=datetime(2020, 8, 15, 0, 0, tzinfo=timezone.utc),
+        origin=hotel,
+        destination=stadium,
+        baseline_seconds=3600,
+        anchor=datetime(2020, 8, 15, 0, 0, tzinfo=timezone.utc),
+        timezone="America/New_York",
+    )
+    unrelated = DesiredBlock(
+        identity="mtg-2",
+        kind="meeting_outbound",
+        summary="Drive: Dentist",
+        start=datetime(2020, 8, 3, 14, 0, tzinfo=timezone.utc),
+        end=datetime(2020, 8, 3, 14, 30, tzinfo=timezone.utc),
+        origin=home,
+        destination="Dentist",
+        baseline_seconds=1800,
+        anchor=datetime(2020, 8, 3, 14, 30, tzinfo=timezone.utc),
+    )
+
+    def route(origin, destination):
+        return timedelta(hours=2)
+
+    blocks, skipped, questions, kept = reconcile_sweep._plan_lodging_legs(
+        schedule=_drive_trip_schedule(),
+        home=home,
+        route=route,
+        now=datetime(2020, 8, 7, 12, 0, tzinfo=timezone.utc),
+        meeting_blocks=[local, unrelated],
+    )
+
+    assert [block.identity for block in kept] == ["mtg-2"]
+    assert any(block.destination == stadium for block in blocks)
+    assert questions == []
+    assert any("absorbed" in note for note in skipped)
+
+
+def test_plan_lodging_legs_keeps_every_meeting_block_when_no_trip_matches(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRIVE_PLANNER_STATE_DIR", str(tmp_path))
+    block = DesiredBlock(
+        identity="mtg-9",
+        kind="meeting_outbound",
+        summary="Drive: Dentist",
+        start=datetime(2020, 8, 3, 14, 0, tzinfo=timezone.utc),
+        end=datetime(2020, 8, 3, 14, 30, tzinfo=timezone.utc),
+        origin="home",
+        destination="Dentist",
+        baseline_seconds=1800,
+        anchor=datetime(2020, 8, 3, 14, 30, tzinfo=timezone.utc),
+    )
+    blocks, skipped, questions, kept = reconcile_sweep._plan_lodging_legs(
+        schedule=[],
+        home="home",
+        route=lambda origin, destination: timedelta(hours=1),
+        now=datetime(2020, 8, 7, 12, 0, tzinfo=timezone.utc),
+        meeting_blocks=[block],
+    )
+    assert kept == [block]
+    assert (blocks, skipped, questions) == ([], [], [])

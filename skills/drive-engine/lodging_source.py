@@ -13,6 +13,18 @@ silence (#231).
 This module adds the outbound `home → lodging` leg and its symmetric
 `lodging → home` return, and decides which flight-less trips get them.
 
+**The outer legs skip the lodging when the operator would not stop there.**
+Anchoring the outbound to land as the first local drive departs the hotel is
+zero dwell — an arrival and a departure at the same instant, a stop made only
+to leave again. When that first local drive LEAVES the lodging the outbound
+goes straight to its venue and absorbs it; the operator reaches the hotel on
+that event's own return leg, checking in when they actually do. The return
+mirrors it: a last local drive back to a lodging already checked out of is
+absorbed, and the drive home departs the venue. Both absorptions are reported
+on `TripPlan.subsumed` for the caller to drop — planning both halves would put
+two drives on the calendar for one journey. A failed direct route degrades to
+the via-the-lodging shape rather than dropping the leg.
+
 **The origin is home by construction, never `position_at`.** Every other leg
 resolves its non-fixed endpoint through the planned-position ladder; this one
 must not. At the outbound leg's own anchor the operator is already checked in
@@ -112,6 +124,27 @@ class DriveTrip:
 
 
 @dataclass(frozen=True)
+class LocalLeg:
+    """One local drive between the lodging and a venue, as the outer legs see it.
+
+    `venue` is the endpoint that is NOT the lodging, `label` the event name the
+    drive was planned for. `identity` / `kind` key the block so a caller can
+    drop it when an outer leg subsumes it.
+    """
+
+    identity: str
+    kind: str
+    label: str
+    venue: str
+    start: datetime
+    end: datetime
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.identity, self.kind)
+
+
+@dataclass(frozen=True)
 class TripContext:
     """What a trip's already-planned local drives imply for the outer legs.
 
@@ -123,11 +156,20 @@ class TripContext:
         planned across an event the operator is still at.
     timezone — the IANA zone those local drives render in, reused so the outer
         legs display in destination-local time too.
+    first_out — the first local drive that LEAVES the lodging, when there is
+        one. The outbound goes straight to its venue instead of through the
+        hotel: landing at the lodging exactly as that drive departs it is zero
+        dwell, a stop the operator makes only to leave it again.
+    last_back — the last local drive that RETURNS to the lodging. The return
+        home departs from its venue instead when the operator has already
+        checked out by then, for the mirror reason.
     """
 
     onward_start: datetime | None = None
     trailing_end: datetime | None = None
     timezone: str | None = None
+    first_out: LocalLeg | None = None
+    last_back: LocalLeg | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +179,11 @@ class TripPlan:
     `verdict` is what the band says, `effective` what applies once a recorded
     operator answer is honoured, and `ask` the question owed the operator (None
     when none is). `blocks` is empty for every outcome but a drive.
+
+    `subsumed` carries the `(identity, kind)` of every local drive an outer leg
+    absorbed — a hotel→venue drive the operator never makes because the
+    outbound went straight to the venue. The caller drops those blocks before
+    reconciling; leaving them in would plan both halves of a journey made once.
     """
 
     trip: DriveTrip
@@ -145,6 +192,7 @@ class TripPlan:
     effective: str
     ask: str | None
     blocks: tuple[DesiredBlock, ...]
+    subsumed: tuple[tuple[str, str], ...] = ()
 
 
 def _trip_span(record: dict) -> tuple[datetime, datetime] | None:
@@ -316,6 +364,19 @@ def build_question(trip: DriveTrip, drive: timedelta) -> str:
     )
 
 
+def _local_leg(block: DesiredBlock, *, venue: str) -> LocalLeg:
+    """A planned local drive as the outer legs need to see it."""
+    label = block.summary.removeprefix("Drive: ").strip() or venue
+    return LocalLeg(
+        identity=block.identity,
+        kind=block.kind,
+        label=label,
+        venue=venue,
+        start=block.start,
+        end=block.end,
+    )
+
+
 def context_from_blocks(
     trips: list[DriveTrip], blocks: list[DesiredBlock]
 ) -> dict[str, TripContext]:
@@ -352,6 +413,8 @@ def context_from_blocks(
         onward: datetime | None = None
         trailing: datetime | None = None
         zone: str | None = None
+        first_out: LocalLeg | None = None
+        last_back: LocalLeg | None = None
         for block in blocks:
             if block.anchor < trip.check_in or block.anchor.date() > last_day.date():
                 continue
@@ -360,22 +423,50 @@ def context_from_blocks(
                 zone = block.timezone
             if trailing is None or block.end > trailing:
                 trailing = block.end
-        contexts[trip.key] = TripContext(onward_start=onward, trailing_end=trailing, timezone=zone)
+            if block.origin == trip.address and (
+                first_out is None or block.start < first_out.start
+            ):
+                first_out = _local_leg(block, venue=block.destination)
+            if block.destination == trip.address and (
+                last_back is None or block.end > last_back.end
+            ):
+                last_back = _local_leg(block, venue=block.origin)
+        contexts[trip.key] = TripContext(
+            onward_start=onward,
+            trailing_end=trailing,
+            timezone=zone,
+            first_out=first_out,
+            last_back=last_back,
+        )
     return contexts
 
 
 def _outbound_block(
-    trip: DriveTrip, ctx: TripContext, drive: timedelta, home_address: str
+    trip: DriveTrip,
+    ctx: TripContext,
+    drive: timedelta,
+    home_address: str,
+    *,
+    destination: str | None = None,
+    label: str | None = None,
+    arrive_by: datetime | None = None,
 ) -> DesiredBlock:
-    arrive_by = ctx.onward_start or trip.check_in
+    """The leg that gets the operator to the trip.
+
+    Defaults to home→lodging landing by the first local drive. The caller
+    overrides the far end when that first drive leaves the lodging, so the
+    outbound goes straight to the venue rather than through a hotel the
+    operator would arrive at and depart from in the same instant.
+    """
+    arrive_by = arrive_by or ctx.onward_start or trip.check_in
     return DesiredBlock(
         identity=trip.key,
         kind=KIND_OUTBOUND,
-        summary=f"Drive: home → {trip.hotel}",
+        summary=f"Drive: home → {label or trip.hotel}",
         start=arrive_by - drive,
         end=arrive_by,
         origin=home_address,
-        destination=trip.address,
+        destination=destination or trip.address,
         baseline_seconds=int(drive.total_seconds()),
         anchor=arrive_by,
         timezone=ctx.timezone,
@@ -383,19 +474,34 @@ def _outbound_block(
 
 
 def _return_block(
-    trip: DriveTrip, ctx: TripContext, drive: timedelta, home_address: str
+    trip: DriveTrip,
+    ctx: TripContext,
+    drive: timedelta,
+    home_address: str,
+    *,
+    origin: str | None = None,
+    label: str | None = None,
+    depart_after: datetime | None = None,
 ) -> DesiredBlock | None:
-    candidates = [when for when in (trip.check_out, ctx.trailing_end) if when is not None]
-    if not candidates:
-        return None
-    depart_after = max(candidates)
+    """The leg that gets the operator home.
+
+    Defaults to lodging→home departing after the later of check-out and the
+    last local drive. The caller overrides the near end when that last drive
+    returns to a lodging already checked out of, so the drive home starts at
+    the venue rather than doubling back to a room the operator has released.
+    """
+    if depart_after is None:
+        candidates = [when for when in (trip.check_out, ctx.trailing_end) if when is not None]
+        if not candidates:
+            return None
+        depart_after = max(candidates)
     return DesiredBlock(
         identity=trip.key,
         kind=KIND_RETURN,
-        summary=f"Drive: {trip.hotel} → home",
+        summary=f"Drive: {label or trip.hotel} → home",
         start=depart_after,
         end=depart_after + drive,
-        origin=trip.address,
+        origin=origin or trip.address,
         destination=home_address,
         baseline_seconds=int(drive.total_seconds()),
         anchor=depart_after,
@@ -453,25 +559,83 @@ def lodging_desired_blocks(
             ask = build_question(trip, outbound_drive)
 
         trip_blocks: list[DesiredBlock] = []
+        subsumed: list[tuple[str, str]] = []
         if effective == VERDICT_DRIVE:
             ctx = contexts.get(trip.key, TripContext())
-            outbound = _outbound_block(trip, ctx, outbound_drive, home_address)
+
+            # Outbound. When the trip's first local drive LEAVES the lodging,
+            # going through the hotel means arriving exactly as that drive
+            # departs — a stop made only to leave it. Drive to the venue
+            # instead and absorb that local leg. A route failure to the venue
+            # falls back to the hotel rather than dropping the leg.
+            out = ctx.first_out
+            direct_out = route(home_address, out.venue) if out is not None else None
+            if out is not None and direct_out is None:
+                skipped.append(
+                    f"lodging {trip.key} outbound: home→{out.label} route failed — "
+                    "routing via the lodging"
+                )
+            if out is not None and direct_out is not None:
+                outbound = _outbound_block(
+                    trip,
+                    ctx,
+                    direct_out,
+                    home_address,
+                    destination=out.venue,
+                    label=out.label,
+                    arrive_by=out.end,
+                )
+                absorbs = out.key
+            else:
+                outbound = _outbound_block(trip, ctx, outbound_drive, home_address)
+                absorbs = None
             if outbound.anchor >= now:
                 trip_blocks.append(outbound)
+                if absorbs is not None:
+                    subsumed.append(absorbs)
             else:
+                # The outbound is not planned, so a local drive it would have
+                # absorbed has to stand on its own.
                 skipped.append(f"lodging {trip.key} outbound: past, skipped")
 
-            return_drive = route(trip.address, home_address)
-            if return_drive is None:
-                skipped.append(f"lodging {trip.key}: lodging→home route failed")
-            else:
-                returning = _return_block(trip, ctx, return_drive, home_address)
-                if returning is None:
-                    skipped.append(f"lodging {trip.key} return: no check-out to depart after")
-                elif returning.anchor < now:
+            # Return. Mirror case: the last local drive comes BACK to a lodging
+            # the operator has already checked out of, so leave from the venue.
+            back = ctx.last_back
+            returning: DesiredBlock | None = None
+            absorbs_back: tuple[str, str] | None = None
+            if back is not None and trip.check_out is not None and back.start >= trip.check_out:
+                direct_home = route(back.venue, home_address)
+                if direct_home is None:
+                    skipped.append(
+                        f"lodging {trip.key} return: {back.label}→home route failed — "
+                        "routing via the lodging"
+                    )
+                else:
+                    returning = _return_block(
+                        trip,
+                        ctx,
+                        direct_home,
+                        home_address,
+                        origin=back.venue,
+                        label=back.label,
+                        depart_after=back.start,
+                    )
+                    absorbs_back = back.key
+            if returning is None:
+                return_drive = route(trip.address, home_address)
+                if return_drive is None:
+                    skipped.append(f"lodging {trip.key}: lodging→home route failed")
+                else:
+                    returning = _return_block(trip, ctx, return_drive, home_address)
+                    if returning is None:
+                        skipped.append(f"lodging {trip.key} return: no check-out to depart after")
+            if returning is not None:
+                if returning.anchor < now:
                     skipped.append(f"lodging {trip.key} return: past, skipped")
                 else:
                     trip_blocks.append(returning)
+                    if absorbs_back is not None:
+                        subsumed.append(absorbs_back)
         elif effective == VERDICT_FLY:
             skipped.append(f"lodging {trip.key}: flying — no drive planned")
         else:
@@ -486,6 +650,7 @@ def lodging_desired_blocks(
                 effective=effective,
                 ask=ask,
                 blocks=tuple(trip_blocks),
+                subsumed=tuple(subsumed),
             )
         )
 
