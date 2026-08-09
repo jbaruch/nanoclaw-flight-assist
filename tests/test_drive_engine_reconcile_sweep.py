@@ -839,3 +839,36 @@ def test_plan_lodging_legs_keeps_every_meeting_block_when_no_trip_matches(tmp_pa
     )
     assert kept == [block]
     assert (blocks, skipped, questions) == ([], [], [])
+
+
+def test_trip_presence_marks_the_first_and_last_event_of_each_trip():
+    """Those two are where a home endpoint is real rather than a stale anchor."""
+
+    class _M:
+        def __init__(self, mid, start):
+            self.meeting_id = mid
+            self.start = start
+
+    class _T:
+        key = "t1"
+        address = "611 Historic Nature Trail"
+        span_start = datetime(2020, 8, 14, tzinfo=timezone.utc)
+        span_end = datetime(2020, 8, 16, tzinfo=timezone.utc)
+
+    meetings = [
+        _M("late", datetime(2020, 8, 15, 22, tzinfo=timezone.utc)),
+        _M("early", datetime(2020, 8, 14, 20, tzinfo=timezone.utc)),
+        _M("middle", datetime(2020, 8, 15, 2, tzinfo=timezone.utc)),
+        _M("offtrip", datetime(2020, 8, 30, 12, tzinfo=timezone.utc)),
+    ]
+    presence = reconcile_sweep._trip_presence([_T()], meetings)
+
+    assert set(presence) == {"early", "middle", "late"}
+    assert (presence["early"].is_first, presence["early"].is_last) == (True, False)
+    assert (presence["middle"].is_first, presence["middle"].is_last) == (False, False)
+    assert (presence["late"].is_first, presence["late"].is_last) == (False, True)
+    assert presence["early"].lodging == "611 Historic Nature Trail"
+
+
+def test_trip_presence_is_empty_without_a_driving_trip():
+    assert reconcile_sweep._trip_presence([], []) == {}

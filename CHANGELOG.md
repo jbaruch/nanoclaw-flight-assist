@@ -1,5 +1,17 @@
 # Changelog
 
+### Fixed — the check-in stamp no longer decides which drives exist (#242)
+
+Moving a hotel check-in past the trip's first event erased that event. On the live Gatlinburg trip, restamping check-in from 16:00 to 22:00 Friday deleted both of the opening ceremony's drives and re-anchored the outbound on Saturday afternoon — the operator drove down a day late and missed the thing he booked the hotel for. A check-in time is a fact about a reservation, not an instruction to the engine.
+
+**The away-suppression no longer fires on a trip the operator drives to.** `DEFAULT_MAX_REASONABLE_DRIVE` means "not positioned to drive it — they flew, or are elsewhere". With check-in after the first event the anchor resolves home, the getting-there drive routes home→venue at its true 234 minutes, and the cap deleted it. The sweep now resolves the drive-verdict trips BEFORE the meeting side and passes their meetings through `driving_to`, where that premise is known false.
+
+**A mid-trip home endpoint is rewritten to the lodging.** `scan` resolves one anchor per meeting, at the event's start, and both legs share it — so the ceremony's return leg drove 4 hours home out of the middle of the trip, with the next morning's drive starting from a hotel nothing had reached. `TripPresence` marks each trip's first and last event, the only two where home is real: they set off from the house, and `lodging_source` owns the drive back.
+
+**The window's bounds are the trip's, not the stay's.** `context_from_blocks` keyed its lower bound on check-in, which is the same dependence by another name. It now runs from the trip wrapper's start, and `first_out` is the first drive INTO one of the trip's venues rather than the first drive OUT of the lodging. Venues are derived from the drives that touch the lodging, so a home→dentist errand on the trip's first morning is not mistaken for the trip's first commitment.
+
+Verified on the live trip: the four outer and local legs are byte-identical with check-in stamped at 16:00, 22:00, 23:00 Friday, or 01:00 Saturday.
+
 ## 0.2.93 — 2026-08-09
 
 ### Changed — the outer legs no longer route through a hotel the operator drives straight past (#231 follow-up)

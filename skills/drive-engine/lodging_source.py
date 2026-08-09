@@ -108,8 +108,9 @@ class DriveTrip:
     address — the lodging's street address, the drive's far endpoint.
     check_in / check_out — the stay's own instants, the fallback anchors.
         `check_out` is None for an orphan check-in, which TripIt does write.
-    span_end — the Trip wrapper's own end, the outer bound on "away at the
-        destination" when the stay has no check-out to supply one.
+    span_start / span_end — the Trip wrapper's own dates, the bounds on "away
+        at the destination". Independent of where the stay's stamps sit, so the
+        plan does not move when the operator restamps a check-in (#242).
     expires — when a verdict about this trip stops applying.
     """
 
@@ -119,6 +120,7 @@ class DriveTrip:
     address: str
     check_in: datetime
     check_out: datetime | None
+    span_start: datetime
     span_end: datetime
     expires: datetime
 
@@ -322,12 +324,67 @@ def find_drive_trips(
                 address=address,
                 check_in=check_in,
                 check_out=check_out,
+                span_start=start,
                 span_end=end,
                 expires=(check_out or end) + VERDICT_GRACE,
             )
         )
     trips.sort(key=lambda trip: trip.check_in)
     return trips
+
+
+def effective_verdict(trip: DriveTrip, drive: timedelta, verdicts: dict[str, TripVerdict]) -> str:
+    """The verdict in force for a trip — the operator's answer, else the band."""
+    recorded = verdicts.get(trip.key)
+    if recorded is not None and recorded.is_operator_answer:
+        return recorded.verdict
+    return classify_drive(drive)
+
+
+def driving_trips(
+    trips: list[DriveTrip],
+    *,
+    route: RouteFn,
+    home_address: str | None,
+    verdicts: dict[str, TripVerdict],
+) -> list[DriveTrip]:
+    """The trips the operator is known to DRIVE to.
+
+    The caller needs this before planning the meeting side, to spare those
+    trips' own events the away-suppression (`meeting_source`, #242). A trip
+    whose home→lodging route fails is not claimed as a drive — the same
+    conservative reading `lodging_desired_blocks` takes when it skips one.
+    """
+    if home_address is None:
+        return []
+    driving: list[DriveTrip] = []
+    for trip in trips:
+        drive = route(home_address, trip.address)
+        if drive is None:
+            continue
+        if effective_verdict(trip, drive, verdicts) == VERDICT_DRIVE:
+            driving.append(trip)
+    return driving
+
+
+def meeting_ids_within(trips: list[DriveTrip], meetings: list) -> frozenset[str]:
+    """The ids of `meetings` falling inside any of `trips`, compared on DATES.
+
+    Date comparison for the reason `_in_span` gives: the Trip wrapper is
+    date-only, so an instant comparison drops the final day's evening events.
+    A meeting with no parsed start belongs to no trip.
+    """
+    ids: set[str] = set()
+    for meeting in meetings:
+        start = getattr(meeting, "start", None)
+        meeting_id = getattr(meeting, "meeting_id", None)
+        if start is None or not meeting_id:
+            continue
+        for trip in trips:
+            if trip.span_start.date() <= start.date() <= trip.span_end.date():
+                ids.add(meeting_id)
+                break
+    return frozenset(ids)
 
 
 def classify_drive(drive: timedelta) -> str:
@@ -404,28 +461,51 @@ def context_from_blocks(
     made every local drive invisible: the outbound ignored the onward drive it
     must land before, and the return leg was dropped as having nothing to depart
     after even with trailing drives on the calendar.
+
+    Both bounds are the trip's, never the stay's. Keying the lower bound on
+    check-in made the plan depend on where the operator stamped it: a check-in
+    after the trip's first event hid that event's drives, and the outbound
+    re-anchored on the next day's (#242). A check-in time is a fact about a
+    reservation, not an instruction about which drives count.
+
+    The trip's VENUES are the endpoints its lodging-touching drives reach, and
+    `first_out` is the first drive INTO one of them — from the hotel or from
+    home, whichever the position ladder produced. Keying on "leaves the
+    lodging" assumed the operator checks in before doing anything, which is the
+    same check-in dependence by another name. Deriving venues from the
+    lodging-touching drives is what keeps a home→dentist errand on the trip's
+    first morning from reading as the trip's first commitment.
     """
     contexts: dict[str, TripContext] = {}
     for trip in trips:
         # `max` rather than `span_end` alone: a stay TripIt records past the
         # wrapper's end still bounds the window at the later of the two.
         last_day = max(trip.span_end, trip.check_out) if trip.check_out else trip.span_end
+        in_window = [
+            block
+            for block in blocks
+            if trip.span_start.date() <= block.anchor.date() <= last_day.date()
+        ]
+        venues = {
+            block.destination if block.origin == trip.address else block.origin
+            for block in in_window
+            if trip.address in (block.origin, block.destination)
+        } - {trip.address}
+
         onward: datetime | None = None
         trailing: datetime | None = None
         zone: str | None = None
         first_out: LocalLeg | None = None
         last_back: LocalLeg | None = None
-        for block in blocks:
-            if block.anchor < trip.check_in or block.anchor.date() > last_day.date():
+        for block in in_window:
+            if not venues & {block.origin, block.destination}:
                 continue
             if onward is None or block.start < onward:
                 onward = block.start
                 zone = block.timezone
             if trailing is None or block.end > trailing:
                 trailing = block.end
-            if block.origin == trip.address and (
-                first_out is None or block.start < first_out.start
-            ):
+            if block.destination in venues and (first_out is None or block.start < first_out.start):
                 first_out = _local_leg(block, venue=block.destination)
             if block.destination == trip.address and (
                 last_back is None or block.end > last_back.end
@@ -548,11 +628,8 @@ def lodging_desired_blocks(
             continue
 
         band = classify_drive(outbound_drive)
+        effective = effective_verdict(trip, outbound_drive, verdicts)
         recorded = verdicts.get(trip.key)
-        if recorded is not None and recorded.is_operator_answer:
-            effective = recorded.verdict
-        else:
-            effective = band
 
         ask = None
         if effective == VERDICT_UNKNOWN and (recorded is None or recorded.needs_question):

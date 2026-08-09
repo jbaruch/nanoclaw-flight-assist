@@ -52,10 +52,16 @@ from engine import AirportInfo, build_reconcile_plan  # noqa: E402
 from flight_mask import flight_codes, is_flight_event, known_flight_codes  # noqa: E402
 from lodging_source import (  # noqa: E402
     context_from_blocks,
+    driving_trips,
     find_drive_trips,
     lodging_desired_blocks,
+    meeting_ids_within,
 )
-from meeting_source import exclude_drive_block_events, meeting_desired_blocks  # noqa: E402
+from meeting_source import (  # noqa: E402
+    TripPresence,
+    exclude_drive_block_events,
+    meeting_desired_blocks,
+)
 from normalize import flight_from_byair  # noqa: E402
 from reconcile import DesiredBlock, ReconcilePlan  # noqa: E402
 from shadow import plan_counts, render_plan  # noqa: E402
@@ -734,6 +740,32 @@ def _persist_static_facts_best_effort(static_facts: dict[int, StaticAirport]) ->
         )
 
 
+def _trip_presence(driving: list, meetings: list) -> dict[str, TripPresence]:
+    """Where the operator sleeps for each meeting on a trip they drive to.
+
+    Keyed by meeting id, for `meeting_desired_blocks`. First / last are decided
+    per trip over that trip's own meetings, ordered by start — those are the two
+    events where a home endpoint is real rather than a stale anchor (#242).
+    """
+    presence: dict[str, TripPresence] = {}
+    for trip in driving:
+        on_trip = sorted(
+            (
+                meeting
+                for meeting in meetings
+                if meeting.meeting_id in meeting_ids_within([trip], [meeting])
+            ),
+            key=lambda meeting: meeting.start,
+        )
+        for index, meeting in enumerate(on_trip):
+            presence[meeting.meeting_id] = TripPresence(
+                lodging=trip.address,
+                is_first=index == 0,
+                is_last=index == len(on_trip) - 1,
+            )
+    return presence
+
+
 def _plan_lodging_legs(
     *,
     schedule: list[dict] | None,
@@ -920,7 +952,22 @@ def _run_sweep() -> dict:
             flight_windows=[],
             flight_summaries=[],
         )
-        meeting_blocks, meeting_skipped = meeting_desired_blocks(meetings, route=route)
+        # A trip the operator DRIVES to is resolved before the meeting side, so
+        # that trip's own events are spared the away-suppression: with a
+        # check-in stamped after the first event the anchor resolves home, the
+        # getting-there drive routes home→venue at its true length, and the cap
+        # would delete the event the trip exists for (#242).
+        driving = driving_trips(
+            find_drive_trips(schedule, now=now, window=SWEEP_WINDOW),
+            route=route,
+            home_address=home,
+            verdicts=load_verdicts(now),
+        )
+        meeting_blocks, meeting_skipped = meeting_desired_blocks(
+            meetings,
+            route=route,
+            driving_to=_trip_presence(driving, meetings),
+        )
     else:
         meeting_skipped = [
             "meeting side skipped: no home_address (flight-assist config and "

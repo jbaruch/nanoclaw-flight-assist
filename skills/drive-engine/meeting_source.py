@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -81,11 +82,54 @@ _DIRECTION_KIND = {
 }
 
 
+@dataclass(frozen=True)
+class TripPresence:
+    """Where the operator sleeps during a trip they have confirmed they drive to.
+
+    `scan` resolves ONE anchor per meeting, at the event's start, and both of
+    that meeting's legs use it. On a trip whose check-in is stamped after the
+    first event that anchor is home, so the drive back from that event was
+    planned to home — a 4-hour drive out of the middle of a trip, with the next
+    morning's drive starting from a hotel nothing ever reached.
+
+    The operator sleeps at the lodging from the first event of the trip until
+    the last. So `lodging` replaces a home endpoint except where home is real:
+    the drive OUT to the first event (they leave from home) and the drive BACK
+    from the last (`lodging_source` plans the actual drive home).
+    """
+
+    lodging: str
+    is_first: bool
+    is_last: bool
+
+
+def _trip_endpoints(leg, presence: TripPresence | None) -> tuple[str, str]:
+    """A leg's endpoints with a mid-trip home rewritten to the trip's lodging.
+
+    Off a driving trip, or where home is the real endpoint, the leg is returned
+    unchanged. `leg.origin` / `leg.destination` are non-None at every call site.
+    """
+    origin, destination = leg.origin, leg.destination
+    if presence is None:
+        return origin, destination
+    if leg.direction == "return":
+        # Back from the LAST event, home is real — `lodging_source` plans that
+        # drive, and this leg deferring to it keeps one owner for the way home.
+        if not presence.is_last and destination != presence.lodging:
+            destination = presence.lodging
+    elif not presence.is_first and origin != presence.lodging:
+        # Out to any event but the FIRST, the operator sets off from the room,
+        # not the house they left days ago.
+        origin = presence.lodging
+    return origin, destination
+
+
 def meeting_desired_blocks(
     meetings: list,
     *,
     route: RouteFn,
     max_reasonable_drive: timedelta = DEFAULT_MAX_REASONABLE_DRIVE,
+    driving_to: dict[str, TripPresence] | None = None,
 ) -> tuple[list[DesiredBlock], list[str]]:
     """Turn scan `MeetingClass` results into unified meeting `DesiredBlock`s.
 
@@ -93,7 +137,19 @@ def meeting_desired_blocks(
     `(blocks, skipped_diagnostics)`. A leg is skipped (never blindly blocked) when
     its anchor is unresolved, its route fails, or its routed drive exceeds
     `max_reasonable_drive` (the travel-away suppression).
+
+    `driving_to` are the meeting ids the away-suppression must NOT fire on: the
+    events of a flight-less trip the operator has confirmed they DRIVE to. The
+    suppression reads a long drive as "not positioned to make it — they flew, or
+    are elsewhere", and for those meetings that premise is known false. A
+    check-in stamped after the trip's first event makes the anchor resolve home,
+    so the getting-there drive routes home→venue at its true length and the cap
+    deleted the very event the trip exists for (#242).
+
+    For those same meetings a home endpoint is rewritten to the trip's lodging
+    unless home is real there — see `TripPresence`.
     """
+    presence = driving_to or {}
     blocks: list[DesiredBlock] = []
     skipped: list[str] = []
 
@@ -104,11 +160,12 @@ def meeting_desired_blocks(
                 note = leg.anchor_note or "unresolved anchor"
                 skipped.append(f"{tag}: {note}")
                 continue
-            drive = route(leg.origin, leg.destination)
+            origin, destination = _trip_endpoints(leg, presence.get(meeting.meeting_id))
+            drive = route(origin, destination)
             if drive is None:
                 skipped.append(f"{tag}: route failed")
                 continue
-            if drive > max_reasonable_drive:
+            if drive > max_reasonable_drive and meeting.meeting_id not in presence:
                 minutes = int(drive.total_seconds() // 60)
                 skipped.append(f"{tag}: {minutes}min drive implausible — suppressed (away?)")
                 continue
@@ -149,8 +206,8 @@ def meeting_desired_blocks(
                     summary=f"Drive: {meeting.summary}",
                     start=start,
                     end=end,
-                    origin=leg.origin,
-                    destination=leg.destination,
+                    origin=origin,
+                    destination=destination,
                     baseline_seconds=int(drive.total_seconds()),
                     anchor=anchor,
                     timezone=getattr(meeting, "timezone", None),
