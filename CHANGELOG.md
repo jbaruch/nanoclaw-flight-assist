@@ -8,7 +8,9 @@ When the trip's first local drive LEAVES the lodging, the outbound now goes stra
 
 Both absorptions ride on `TripPlan.subsumed`, and `_plan_lodging_legs` now returns the meeting side with those blocks removed. Reconciling both halves would put two drives on the calendar for one journey and strand the absorbed one there. A failed direct route degrades to the old via-the-lodging shape rather than dropping the leg.
 
-Moving the TripIt check-in stamp is NOT a workaround for the old shape — `context_from_blocks` counts only drives anchored at or after check-in, so pushing check-in past the first event drops that event's drives from the window and re-anchors the outbound on the NEXT day's. The engine now handles the nominal check-in correctly and the stamp is best left alone.
+This fixes the nominal-check-in case, not the general one. The plan is still sensitive to the check-in stamp: a check-in moved past the trip's first event erases that event's drives entirely, so the outbound re-anchors on the next day's. Tracked as a bug in #242 — a correct engine plans the same trip the same way wherever the operator puts the stamp.
+
+## 0.2.92 — 2026-08-09
 
 ### Fixed — the drive home no longer leaves before the last day's event (#231 follow-up)
 
