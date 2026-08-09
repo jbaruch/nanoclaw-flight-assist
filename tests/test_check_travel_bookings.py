@@ -42,6 +42,10 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 _FROZEN_TODAY = date(2026, 4, 30)
+# Verdict expiries either side of the frozen clock, so "expired" is a fixture
+# fact rather than a function of when the suite runs.
+_ACTIVE_EXPIRY = "2026-05-19T00:00:00+00:00"
+_LAPSED_EXPIRY = "2026-04-29T00:00:00+00:00"
 _FROZEN_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
 
@@ -1367,7 +1371,7 @@ def _lodging_only_db():
     )
 
 
-def _write_verdict(tmp_path, verdict, *, slug=_TRIP_SLUG, version=1):
+def _write_verdict(tmp_path, verdict, *, slug=_TRIP_SLUG, version=1, expires=_ACTIVE_EXPIRY):
     (tmp_path / "drive-decisions.json").write_text(
         json.dumps(
             {
@@ -1378,7 +1382,7 @@ def _write_verdict(tmp_path, verdict, *, slug=_TRIP_SLUG, version=1):
                         "decided_by": "operator",
                         "drive_seconds": 30000,
                         "asked_at": None,
-                        "expires": "2026-05-19T00:00:00+00:00",
+                        "expires": expires,
                     }
                 },
             }
@@ -1401,20 +1405,88 @@ def test_a_fly_verdict_turns_a_hotel_only_trip_into_a_gap(
     assert [g["issue"] for g in payload["gaps"]] == ["отель есть, рейса нет"]
 
 
-@pytest.mark.parametrize("verdict", ["drive", "unknown"])
-def test_a_drive_or_unanswered_verdict_is_not_a_gap(
-    check_travel_bookings, monkeypatch, capsys, tmp_path, verdict
-):
-    """`drive` means the engine is planning it; `unknown` means it has asked
-    and is waiting. Neither is a booking gap yet."""
+def test_a_drive_verdict_is_not_a_gap(check_travel_bookings, monkeypatch, capsys, tmp_path):
+    """The engine is planning the drive — no flight is expected."""
     module, db_path, _state = check_travel_bookings
     db_path.write_text(json.dumps(_lodging_only_db()), encoding="utf-8")
-    _write_verdict(tmp_path, verdict)
+    _write_verdict(tmp_path, "drive")
 
     _code, out, _err = _run(module, monkeypatch, capsys)
     payload = json.loads(out)
     assert payload["gaps"] == []
     assert payload["complete_trips"] == 1
+
+
+def test_an_unanswered_verdict_is_surfaced_daily_as_a_question(
+    check_travel_bookings, monkeypatch, capsys, tmp_path
+):
+    """The engine asks once and never re-asks, so a missed notice left the trip
+    with no drive legs and no alert at all (#240). This check runs daily, which
+    is the cadence a nudge wants — so the open question rides the same gap line,
+    worded as a question and naming the reply words."""
+    module, db_path, _state = check_travel_bookings
+    db_path.write_text(json.dumps(_lodging_only_db()), encoding="utf-8")
+    _write_verdict(tmp_path, "unknown")
+
+    _code, out, _err = _run(module, monkeypatch, capsys)
+    payload = json.loads(out)
+    assert [g["issue"] for g in payload["gaps"]] == [module.TRANSPORT_GAP_ASK_ISSUE]
+    assert "drive" in module.TRANSPORT_GAP_ASK_ISSUE
+    assert "fly" in module.TRANSPORT_GAP_ASK_ISSUE
+    assert payload["complete_trips"] == 0
+
+
+@pytest.mark.parametrize("verdict", ["fly", "unknown"])
+def test_an_expired_verdict_raises_no_gap(
+    check_travel_bookings, monkeypatch, capsys, tmp_path, verdict
+):
+    """The record is residue once its trip is over. Leaning on the owner's prune
+    would let a finished trip keep nagging whenever that sweep has not run."""
+    module, db_path, _state = check_travel_bookings
+    db_path.write_text(json.dumps(_lodging_only_db()), encoding="utf-8")
+    _write_verdict(tmp_path, verdict, expires=_LAPSED_EXPIRY)
+
+    _code, out, _err = _run(module, monkeypatch, capsys)
+    assert json.loads(out)["gaps"] == []
+
+
+@pytest.mark.parametrize("expires", [None, "", "not-a-date", "2026-05-19T00:00:00", 17])
+def test_a_verdict_without_a_usable_expiry_raises_no_gap(
+    check_travel_bookings, monkeypatch, capsys, tmp_path, expires
+):
+    """`expires` is required by the writer's contract, and a naive one cannot be
+    compared. Absent or unusable is residue, not a live verdict."""
+    module, db_path, _state = check_travel_bookings
+    db_path.write_text(json.dumps(_lodging_only_db()), encoding="utf-8")
+    _write_verdict(tmp_path, "unknown", expires=expires)
+
+    _code, out, _err = _run(module, monkeypatch, capsys)
+    assert json.loads(out)["gaps"] == []
+
+
+def test_the_unanswered_question_reads_differently_from_a_settled_gap(
+    check_travel_bookings,
+):
+    """A settled `fly` gap is a booking to make; an open question is a question.
+    One shared wording would tell the operator to book a flight they may not
+    want, and the daily nudge would read as a stuck alert."""
+    module, _db_path, _state = check_travel_bookings
+    assert module.TRANSPORT_GAP_ISSUE != module.TRANSPORT_GAP_ASK_ISSUE
+    assert module.TRANSPORT_GAP_ASK_ISSUE.startswith(module.TRANSPORT_GAP_ISSUE)
+
+
+def test_an_unreadable_verdict_store_yields_no_question(
+    check_travel_bookings, monkeypatch, capsys, tmp_path
+):
+    """Widening the reader must not widen the alert-storm surface: a corrupt
+    store still means no verdicts, never a question about every trip."""
+    module, db_path, _state = check_travel_bookings
+    db_path.write_text(json.dumps(_lodging_only_db()), encoding="utf-8")
+    (tmp_path / "drive-decisions.json").write_text("{not json", encoding="utf-8")
+
+    _code, out, _err = _run(module, monkeypatch, capsys)
+    assert json.loads(out)["gaps"] == []
+    assert module.load_transport_gap_verdicts(tmp_path / "drive-decisions.json") == {}
 
 
 def test_no_verdict_store_means_no_gap(check_travel_bookings, monkeypatch, capsys):

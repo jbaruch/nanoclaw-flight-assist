@@ -124,7 +124,7 @@ Writer / reader contract:
 - **Writers** — both co-bundled, both through the owner API. The sweep (`reconcile_sweep._plan_lodging_legs`) calls `record_drive_time` each cycle and `mark_asked` when it hands the question to the payload. The answer action (`answer_drive_or_fly.py`) calls `record_operator_answer`.
 - **Precedence** — `record_drive_time` never overwrites an unexpired verdict whose `decided_by` is `operator`, so a sweep landing after the answer cannot revert it and re-ask. `asked_at` likewise survives a re-derivation, so the question is asked once per trip, not once per sweep.
 - **Reader (same skill)** — the sweep calls `load_verdicts(now)` and passes the result to `lodging_source.lodging_desired_blocks`.
-- **Reader (other skill)** — `check-travel-bookings` reads the file directly, read-only and non-migrating, to report a missing flight for a `fly` verdict. It never writes and never upgrades a version.
+- **Reader (other skill)** — `check-travel-bookings` reads the file directly, read-only and non-migrating, to report a missing flight for a `fly` verdict and to re-raise the open question for an `unknown` one (#240). It never writes and never upgrades a version.
 
 Tolerance:
 
