@@ -1,5 +1,15 @@
 # Changelog
 
+### Fixed — the drive home no longer leaves before the last day's event (#231 follow-up)
+
+The return leg of a flight-less trip departed at hotel check-out, stranding the operator: on the live Gatlinburg trip it drove home Aug 15 11:00 EDT and landed at 14:50, while the calendar still had a 17:47 drive from that hotel to a 18:00 game and a 22:00 drive back to it.
+
+`context_from_blocks` closed its window at check-out, so no drive anchored after check-out ever became `trailing_end`, and `_return_block`'s `max(check_out, trailing_end)` had nothing later to pick. Check-out releases the room, not the operator — an evening event on the check-out day is the ordinary shape of a weekend trip.
+
+The window now closes at the end of the trip's last day. Two things had to change together: the bound moved from check-out to the trip wrapper's end, and the upper comparison moved from instants to DATES. The date reading is the one `_in_span` already documents for the same wrapper — a date-only `end` parses to that day's midnight while items on the final day carry real times past it. On the live trip the wrapper ends 2026-08-16 00:00 UTC and the last game drive ends 02:13 UTC, so an instant comparison against the wrapper would still have dropped it.
+
+The existing return-leg test passed throughout because it hand-built a `TripContext` with a post-check-out `trailing_end` — a value the real producer could not yield. The regression test now drives the return leg from the context `context_from_blocks` actually returns.
+
 ## 0.2.91 — 2026-08-09
 
 ### Changed — drive-time alerts need to be imminent and worth acting on

@@ -322,25 +322,38 @@ def context_from_blocks(
     """Derive each trip's `TripContext` from the local drives already planned.
 
     A block counts toward a trip when its anchor falls between that trip's
-    check-in and the end of its stay — the window during which the operator is
+    check-in and the end of the trip — the window during which the operator is
     at the destination, so any drive anchored in it is a local one this trip's
     outer legs must not overlap.
 
-    An orphan check-in (no check-out record, which TripIt does write) falls back
-    to the trip wrapper's own end rather than collapsing the window to the
-    check-in instant. Collapsing it made every local drive invisible: the
-    outbound ignored the onward drive it must land before, and the return leg
-    was dropped as having nothing to depart after even with trailing drives on
-    the calendar.
+    The window closes at the end of the trip's last DAY, never at check-out.
+    Check-out releases the room, not the operator: an evening event on the
+    check-out day is the ordinary shape of a weekend trip, and clamping at
+    check-out hid every drive after it. The return leg then departed at
+    check-out and landed home hours before a game the calendar still had the
+    operator driving to from a hotel they had left.
+
+    The upper bound compares DATES, the reading `_in_span` takes for the same
+    wrapper: date-only `end` parses to that day's midnight while items on the
+    final day carry real times past it. An instant comparison drops the last
+    evening's drives — the ones the return leg most needs to depart after.
+
+    An orphan check-in (no check-out record, which TripIt does write) needs no
+    special case under that bound. Collapsing the window to the check-in instant
+    made every local drive invisible: the outbound ignored the onward drive it
+    must land before, and the return leg was dropped as having nothing to depart
+    after even with trailing drives on the calendar.
     """
     contexts: dict[str, TripContext] = {}
     for trip in trips:
-        window_end = trip.check_out or trip.span_end
+        # `max` rather than `span_end` alone: a stay TripIt records past the
+        # wrapper's end still bounds the window at the later of the two.
+        last_day = max(trip.span_end, trip.check_out) if trip.check_out else trip.span_end
         onward: datetime | None = None
         trailing: datetime | None = None
         zone: str | None = None
         for block in blocks:
-            if not (trip.check_in <= block.anchor <= window_end):
+            if block.anchor < trip.check_in or block.anchor.date() > last_day.date():
                 continue
             if onward is None or block.start < onward:
                 onward = block.start

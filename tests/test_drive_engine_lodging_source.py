@@ -349,6 +349,65 @@ def test_context_from_blocks_reads_the_local_drives():
     assert ctx.timezone == "America/New_York"
 
 
+def test_context_counts_a_local_drive_after_check_out():
+    """The check-out-day evening game is the ordinary shape of a weekend trip.
+
+    Clamping the window at check-out hid it, so the return leg departed at
+    check-out and landed home before a game the calendar still had the operator
+    driving to from a hotel they had left. Paired with `_plan` below so the
+    context the real producer yields is the one the return leg is planned from —
+    the hand-built `TripContext` in the sibling test cannot catch this.
+    """
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    evening_out = DesiredBlock(
+        identity="mtg3",
+        kind="meeting_outbound",
+        summary="Drive: Game",
+        start=CHECK_OUT + timedelta(hours=6),
+        end=CHECK_OUT + timedelta(hours=7),
+        origin=HOTEL_ADDRESS,
+        destination="Stadium",
+        baseline_seconds=3600,
+        anchor=CHECK_OUT + timedelta(hours=7),
+        timezone="America/New_York",
+    )
+    evening_back = DesiredBlock(
+        identity="mtg4",
+        kind="meeting_return",
+        summary="Drive: Game",
+        start=CHECK_OUT + timedelta(hours=11),
+        end=CHECK_OUT + timedelta(hours=12),
+        origin="Stadium",
+        destination=HOTEL_ADDRESS,
+        baseline_seconds=3600,
+        anchor=CHECK_OUT + timedelta(hours=11),
+        timezone="America/New_York",
+    )
+    ctx = context_from_blocks(trips, [evening_out, evening_back])[TRIP_KEY]
+    assert ctx.trailing_end == evening_back.end
+
+    blocks, _skipped, _plans = _plan(drive=timedelta(hours=2), contexts={TRIP_KEY: ctx})
+    assert blocks[1].start == evening_back.end
+
+
+def test_context_ignores_blocks_anchored_after_the_trip_ends():
+    """The trip wrapper's end still bounds the window — a drive the following
+    week is not this trip's local traffic."""
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    next_week = DesiredBlock(
+        identity="mtg8",
+        kind="meeting_outbound",
+        summary="Drive: Dentist",
+        start=CHECK_OUT + timedelta(days=7),
+        end=CHECK_OUT + timedelta(days=7, minutes=30),
+        origin=HOME,
+        destination="Dentist",
+        baseline_seconds=1800,
+        anchor=CHECK_OUT + timedelta(days=7, minutes=30),
+    )
+    assert context_from_blocks(trips, [next_week])[TRIP_KEY] == TripContext()
+
+
 def test_context_ignores_blocks_anchored_outside_the_stay():
     """A drive at home the week before is not this trip's local traffic."""
     trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
