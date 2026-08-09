@@ -45,9 +45,26 @@ DRIVE_DECISIONS_DEFAULT_DIR = "/workspace/state/drive-planner"
 DRIVE_DECISIONS_FILE = "drive-decisions.json"
 DRIVE_DECISIONS_SCHEMA_VERSION = 1
 
-# The verdict that makes a flight-less trip a booking gap: the operator is
-# flying (or the drive is too long to be one) and no flight is booked.
+# The verdicts that make a flight-less trip a booking gap.
+#   fly     — the operator is flying (or the drive is too long to be one) and
+#             no flight is booked. A settled gap.
+#   unknown — the drive time is ambiguous and the engine is still waiting on
+#             an answer. Also surfaced, worded as a question, because a
+#             question asked once and missed is a question lost: the engine
+#             stamps `asked_at` and never asks again, so nothing re-raised it
+#             and the trip got no drive legs AND no alert (#240). This check
+#             runs daily, which is the right cadence for a nudge — the 30-min
+#             sweep would be a nag.
+# `drive` is not a gap: the engine is planning the drive, no flight expected.
 VERDICT_FLY = "fly"
+VERDICT_UNKNOWN = "unknown"
+_GAP_VERDICTS = frozenset({VERDICT_FLY, VERDICT_UNKNOWN})
+
+# The two wordings of the hotel-without-transport gap. Relayed VERBATIM into
+# the operator-facing line (`SKILL.md` Step 3), so the `drive` / `fly` reply
+# words the drive engine's answer path matches are named in the ask itself.
+TRANSPORT_GAP_ISSUE = "отель есть, рейса нет"
+TRANSPORT_GAP_ASK_ISSUE = "отель есть, рейса нет — едешь на машине? ответь «drive» или «fly»"
 
 # Bump in lock-step with build-travel-db.py per
 # `coding-policy: stateful-artifacts` + state-schema.md sibling file.
@@ -69,8 +86,8 @@ def _schema_compatible(value) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def load_flying_trips(path: Path | None = None) -> set:
-    """Trip slugs the drive engine has settled as flights, per its verdict store.
+def load_transport_gap_verdicts(path: Path | None = None) -> dict:
+    """Trip slug → drive-or-fly verdict, for the verdicts that are a booking gap.
 
     A READ-ONLY, non-migrating consumer of another skill's artifact
     (`coding-policy: stateful-artifacts`). Deliberately looser than the owner's
@@ -80,9 +97,10 @@ def load_flying_trips(path: Path | None = None) -> set:
     file is exactly the alert storm that rule forbids — under-reporting a gap is
     recoverable, a storm of false ones is not.
 
-    Only `fly` verdicts are returned. `drive` means the engine is planning the
-    drive and no flight is expected; `unknown` means it has asked the operator
-    and is waiting, which is not yet a gap.
+    Returns `fly` and `unknown` verdicts (see `_GAP_VERDICTS`); `drive` is
+    omitted, since the engine is planning the drive and no flight is expected.
+    The caller words the two differently — `fly` is a settled gap, `unknown` is
+    the daily nudge that replaces a one-shot question nobody re-asked.
     """
     target = (
         path
@@ -92,20 +110,20 @@ def load_flying_trips(path: Path | None = None) -> set:
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return set()
+        return {}
     if not isinstance(payload, dict):
-        return set()
+        return {}
     if payload.get("schema_version") != DRIVE_DECISIONS_SCHEMA_VERSION:
-        return set()
+        return {}
     trips = payload.get("trips")
     if not isinstance(trips, dict):
-        return set()
+        return {}
     return {
-        slug
+        slug: record["verdict"]
         for slug, record in trips.items()
         if isinstance(slug, str)
         and isinstance(record, dict)
-        and record.get("verdict") == VERDICT_FLY
+        and record.get("verdict") in _GAP_VERDICTS
     }
 
 
@@ -396,9 +414,10 @@ def main():
     if not isinstance(snooze_state, dict):
         snooze_state = {}
 
-    # Which flight-less trips the drive engine settled as flights (#231). Empty
-    # when the store is absent or unreadable — see `load_flying_trips`.
-    flying_trips = load_flying_trips()
+    # The drive engine's verdict per flight-less trip, for the two that are a
+    # gap (#231, #240). Empty when the store is absent or unreadable — see
+    # `load_transport_gap_verdicts`.
+    transport_verdicts = load_transport_gap_verdicts()
 
     gaps = []
     complete_trips = 0
@@ -451,14 +470,25 @@ def main():
         elif (
             not classification["has_transport"]
             and classification["has_lodging"]
-            and slug in flying_trips
+            and slug in transport_verdicts
         ):
             # The mirror of "рейсы есть, отеля нет": hotel booked, nothing to
             # get there on. Gated on the drive engine's verdict rather than on
             # the missing transport alone, because a trip the operator drives to
             # has no transport booking by design and alerting on it would nag
             # about every weekend away (#231).
-            issue = "отель есть, рейса нет"
+            #
+            # An `unknown` verdict is the same gap with the question still open,
+            # so it is worded as one. This daily surface is what makes the
+            # question survivable: the engine asks once and never re-asks, so a
+            # missed notice used to leave the trip with no drive legs and no
+            # alert at all (#240). Answering either way clears it — `drive`
+            # drops out of `_GAP_VERDICTS`, `fly` settles into the line above.
+            issue = (
+                TRANSPORT_GAP_ISSUE
+                if transport_verdicts[slug] == VERDICT_FLY
+                else TRANSPORT_GAP_ASK_ISSUE
+            )
 
         if issue is None:
             complete_trips += 1

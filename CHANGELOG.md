@@ -1,5 +1,17 @@
 # Changelog
 
+### Changed — an unanswered drive-or-fly question is nudged daily instead of asked once (#240)
+
+The engine asked once and stopped. `mark_asked` stamps `asked_at`, `needs_question` goes false, and nothing ever set it back — so a missed Telegram notice left the trip with no drive legs AND no alert, right through departure. That is what happened to the live Gatlinburg trip: the question went out, was missed, and the trip sat unplanned for five hours until the operator was asked again out of band.
+
+The open question now rides `check-travel-bookings`, which already exists to nudge about booking gaps and runs daily — the cadence a nudge wants, where the 30-minute sweep would be a nag. An `unknown` verdict raises the same hotel-without-transport gap as `fly`, worded as a question and naming the `drive` / `fly` reply words the answer path matches. Either answer clears it: `drive` drops out of the gap verdicts entirely, `fly` settles into the ordinary missing-flight line.
+
+The sweep's immediate one-shot ask stays. It reaches the operator within half an hour of the trip appearing, and the daily surface is the safety net under it rather than a replacement — so nothing is lost if the notice lands while they are away from the phone.
+
+`load_flying_trips` becomes `load_transport_gap_verdicts`, returning slug → verdict rather than a set of slugs. Its no-prior-state path is unchanged and deliberately loose: a missing, unreadable, or unrecognized-version store yields no verdicts and therefore no gap, because widening the reader must not widen the alert-storm surface. No `schema_version` bump — the record shape is untouched, so the cross-pipeline skew this reader gates on cannot open.
+
+The nudge is bounded without a horizon of its own: an `unknown` verdict only exists for trips inside drive-engine's 14-day `SWEEP_WINDOW`, and the existing per-trip snooze still applies.
+
 ### Fixed — the check-in stamp no longer decides which drives exist (#242)
 
 Moving a hotel check-in past the trip's first event erased that event. On the live Gatlinburg trip, restamping check-in from 16:00 to 22:00 Friday deleted both of the opening ceremony's drives and re-anchored the outbound on Saturday afternoon — the operator drove down a day late and missed the thing he booked the hotel for. A check-in time is a fact about a reservation, not an instruction to the engine.
