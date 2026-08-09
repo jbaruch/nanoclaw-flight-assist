@@ -92,7 +92,7 @@ def load_transport_gap_verdicts(path: Path | None = None) -> dict:
     A READ-ONLY, non-migrating consumer of another skill's artifact
     (`coding-policy: stateful-artifacts`). Deliberately looser than the owner's
     own reader: a missing, unreadable, non-object, or unrecognized-version file
-    yields an EMPTY set, never an exception. The no-prior-state path has to stay
+    yields an EMPTY MAP, never an exception. The no-prior-state path has to stay
     non-disruptive, and inventing missing-flight alerts out of an unreadable
     file is exactly the alert storm that rule forbids — under-reporting a gap is
     recoverable, a storm of false ones is not.
