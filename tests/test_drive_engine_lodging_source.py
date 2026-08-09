@@ -881,9 +881,10 @@ def test_meetings_on_trip_takes_the_last_evening_but_not_the_next_week():
     early = _meeting("early", datetime(2020, 8, 14, 1, 0, tzinfo=UTC))
     off = _meeting("off", datetime(2020, 8, 20, 12, 0, tzinfo=UTC))
     undated = _meeting("undated", None)
-    assert meetings_on_trip(trips[0], [late, early, off, undated], route=local) == frozenset(
-        {"late", "early"}
-    )
+    assert set(meetings_on_trip(trips[0], [late, early, off, undated], route=local)) == {
+        "late",
+        "early",
+    }
 
 
 def test_a_meeting_far_from_the_lodging_is_not_on_the_trip():
@@ -894,10 +895,10 @@ def test_a_meeting_far_from_the_lodging_is_not_on_the_trip():
     during = _meeting("home-appt", CHECK_IN + timedelta(hours=20), location="Dentist")
 
     far = _router(out=LOCAL_TO_LODGING_MAX + timedelta(minutes=1))
-    assert meetings_on_trip(trips[0], [during], route=far) == frozenset()
+    assert meetings_on_trip(trips[0], [during], route=far) == {}
 
     near = _router(out=LOCAL_TO_LODGING_MAX)
-    assert meetings_on_trip(trips[0], [during], route=near) == frozenset({"home-appt"})
+    assert meetings_on_trip(trips[0], [during], route=near) == {"home-appt": LOCAL_TO_LODGING_MAX}
 
 
 def test_an_unroutable_or_placeless_meeting_is_not_on_the_trip():
@@ -905,10 +906,8 @@ def test_an_unroutable_or_placeless_meeting_is_not_on_the_trip():
     trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
     placeless = _meeting("no-loc", CHECK_IN + timedelta(hours=20), location=None)
     normal = _meeting("m", CHECK_IN + timedelta(hours=20))
-    assert meetings_on_trip(trips[0], [placeless], route=_router(out=timedelta(minutes=5))) == (
-        frozenset()
-    )
-    assert meetings_on_trip(trips[0], [normal], route=lambda o, d: None) == frozenset()
+    assert meetings_on_trip(trips[0], [placeless], route=_router(out=timedelta(minutes=5))) == {}
+    assert meetings_on_trip(trips[0], [normal], route=lambda o, d: None) == {}
 
 
 def test_meetings_on_trip_upper_bound_matches_the_context_window():
@@ -932,7 +931,7 @@ def test_meetings_on_trip_upper_bound_matches_the_context_window():
     )
     local = _router(out=timedelta(minutes=5))
     inside_stay = _meeting("after", late_out - timedelta(hours=2))
-    assert meetings_on_trip(trip, [inside_stay], route=local) == frozenset({"after"})
+    assert set(meetings_on_trip(trip, [inside_stay], route=local)) == {"after"}
 
     beyond = _meeting("beyond", late_out + timedelta(days=2))
-    assert meetings_on_trip(trip, [beyond], route=local) == frozenset()
+    assert meetings_on_trip(trip, [beyond], route=local) == {}

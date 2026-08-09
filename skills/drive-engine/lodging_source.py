@@ -379,8 +379,12 @@ def driving_trips(
     return driving
 
 
-def meetings_on_trip(trip: DriveTrip, meetings: list, *, route: RouteFn) -> frozenset[str]:
-    """The ids of `meetings` that belong to `trip` — dates AND reachability.
+def meetings_on_trip(trip: DriveTrip, meetings: list, *, route: RouteFn) -> dict[str, timedelta]:
+    """`meetings` belonging to `trip`, as id → drive from its lodging.
+
+    Membership is dates AND reachability. The drive itself is returned, not
+    just the id, so a caller holding overlapping trips can settle which one a
+    meeting belongs to instead of letting iteration order decide (#245).
 
     Dates alone are not evidence of belonging. Every meeting occurring while a
     trip is under way would qualify, including a home appointment the operator
@@ -402,7 +406,7 @@ def meetings_on_trip(trip: DriveTrip, meetings: list, *, route: RouteFn) -> froz
     wrapper's end extends it.
     """
     last_day = max(trip.span_end, trip.check_out) if trip.check_out else trip.span_end
-    ids: set[str] = set()
+    reachable: dict[str, timedelta] = {}
     for meeting in meetings:
         start = getattr(meeting, "start", None)
         meeting_id = getattr(meeting, "meeting_id", None)
@@ -413,8 +417,8 @@ def meetings_on_trip(trip: DriveTrip, meetings: list, *, route: RouteFn) -> froz
             continue
         local = route(trip.address, location)
         if local is not None and local <= LOCAL_TO_LODGING_MAX:
-            ids.add(meeting_id)
-    return frozenset(ids)
+            reachable[meeting_id] = local
+    return reachable
 
 
 def classify_drive(drive: timedelta) -> str:

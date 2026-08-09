@@ -750,12 +750,29 @@ def _trip_presence(driving: list, meetings: list, *, route: RouteFn) -> dict[str
     Membership is `lodging_source.meetings_on_trip`, which needs the router: an
     event belongs to a trip by being reachable from its lodging, not merely by
     falling on its dates (#243 review).
+
+    Two overlapping trips can both reach one meeting. The nearer lodging takes
+    it — that is where the operator would set off from — and an exact tie is
+    declined rather than broken by iteration order, which would make the chosen
+    lodging and the first/last flags depend on trip ordering (#245 review).
     """
+    claims: dict[str, list[tuple[timedelta, object]]] = {}
+    for trip in driving:
+        for meeting_id, drive in meetings_on_trip(trip, meetings, route=route).items():
+            claims.setdefault(meeting_id, []).append((drive, trip))
+
+    owner: dict[str, object] = {}
+    for meeting_id, candidates in claims.items():
+        # Sort on the drive alone: the trips themselves are not orderable, and a
+        # stable sort keeps equal drives adjacent for the tie check below.
+        candidates.sort(key=lambda candidate: candidate[0])
+        if len(candidates) == 1 or candidates[0][0] < candidates[1][0]:
+            owner[meeting_id] = candidates[0][1]
+
     presence: dict[str, TripPresence] = {}
     for trip in driving:
-        on_trip_ids = meetings_on_trip(trip, meetings, route=route)
         on_trip = sorted(
-            (meeting for meeting in meetings if meeting.meeting_id in on_trip_ids),
+            (meeting for meeting in meetings if owner.get(meeting.meeting_id) is trip),
             key=lambda meeting: meeting.start,
         )
         for index, meeting in enumerate(on_trip):

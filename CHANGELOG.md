@@ -8,6 +8,8 @@ The `TripPresence` matching shipped in #243 used date containment alone, so ever
 
 **Bridge legs keep their prior-venue origin.** `_trip_endpoints` rewrote the origin of every non-`return` leg, and `_DIRECTION_KIND` maps `bridge` onto `meeting_outbound`. A bridge leg runs venue to venue between two tight-gap meetings, so rewriting its origin invented a detour through the hotel between back-to-back events. It now matches `outbound` explicitly.
 
+**Overlapping trips resolve deterministically.** Two trips can both reach one meeting, and assigning presence per trip let whichever iterated last win — making the chosen lodging and the first/last flags depend on trip ordering. The nearer lodging takes the meeting; an exact tie is declined rather than broken arbitrarily, the safe direction since membership only ever grants the suppression exemption. `meetings_on_trip` returns id → drive rather than a bare id set so the caller can settle it.
+
 **One verdict-store read per sweep.** The meeting side loaded verdicts to decide which trips are drives and the lodging side loaded them again to plan those trips, straddling the store's own prune — two reads that could disagree about an operator answer inside a single sweep.
 
 ## 0.2.94 — 2026-08-09
