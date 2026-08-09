@@ -117,10 +117,16 @@ def _trip_endpoints(leg, presence: TripPresence | None) -> tuple[str, str]:
         # drive, and this leg deferring to it keeps one owner for the way home.
         if not presence.is_last and destination != presence.lodging:
             destination = presence.lodging
-    elif not presence.is_first and origin != presence.lodging:
+    elif leg.direction == "outbound" and not presence.is_first:
         # Out to any event but the FIRST, the operator sets off from the room,
         # not the house they left days ago.
-        origin = presence.lodging
+        #
+        # `outbound` explicitly, never "not a return": a BRIDGE leg runs venue
+        # to venue between two tight-gap meetings, and its origin is the prior
+        # venue rather than the anchor. Rewriting that to the lodging invents a
+        # detour through the hotel between back-to-back events (#243 review).
+        if origin != presence.lodging:
+            origin = presence.lodging
     return origin, destination
 
 

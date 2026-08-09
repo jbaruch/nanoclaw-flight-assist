@@ -13,6 +13,7 @@ anchoring rules that keep the outer legs from colliding with the local ones.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -35,13 +36,15 @@ from lodging_source import (  # noqa: E402
     DRIVE_IMPLAUSIBLE_MIN,
     KIND_OUTBOUND,
     KIND_RETURN,
+    LOCAL_TO_LODGING_MAX,
+    DriveTrip,
     TripContext,
     classify_drive,
     context_from_blocks,
     driving_trips,
     find_drive_trips,
     lodging_desired_blocks,
-    meeting_ids_within,
+    meetings_on_trip,
 )
 from reconcile import DesiredBlock  # noqa: E402
 
@@ -857,17 +860,78 @@ def test_driving_trips_does_not_claim_a_trip_whose_route_failed():
     )
 
 
-def test_meeting_ids_within_compares_dates_so_the_last_evening_counts():
+@dataclass(frozen=True)
+class FakeMeeting:
+    """Duck-typed to the `scan.MeetingClass` surface `meetings_on_trip` reads."""
+
+    meeting_id: str
+    start: datetime | None
+    location: str | None = "Stadium"
+
+
+def _meeting(mid, start, location: str | None = "Stadium"):
+    return FakeMeeting(meeting_id=mid, start=start, location=location)
+
+
+def test_meetings_on_trip_takes_the_last_evening_but_not_the_next_week():
     trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
-
-    class _M:
-        def __init__(self, mid, start):
-            self.meeting_id = mid
-            self.start = start
-
+    local = _router(out=timedelta(minutes=20))
     # The wrapper ends 2020-08-16 00:00; an event that evening is still on it.
-    late = _M("late", datetime(2020, 8, 16, 23, 0, tzinfo=UTC))
-    early = _M("early", datetime(2020, 8, 14, 1, 0, tzinfo=UTC))
-    off = _M("off", datetime(2020, 8, 20, 12, 0, tzinfo=UTC))
-    undated = _M("undated", None)
-    assert meeting_ids_within(trips, [late, early, off, undated]) == frozenset({"late", "early"})
+    late = _meeting("late", datetime(2020, 8, 16, 23, 0, tzinfo=UTC))
+    early = _meeting("early", datetime(2020, 8, 14, 1, 0, tzinfo=UTC))
+    off = _meeting("off", datetime(2020, 8, 20, 12, 0, tzinfo=UTC))
+    undated = _meeting("undated", None)
+    assert set(meetings_on_trip(trips[0], [late, early, off, undated], route=local)) == {
+        "late",
+        "early",
+    }
+
+
+def test_a_meeting_far_from_the_lodging_is_not_on_the_trip():
+    """Dates alone would hand every appointment during the trip a TripPresence —
+    exempting a home meeting from the implausible-drive suppression and inventing
+    a cross-country block, the failure that suppression exists to prevent."""
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    during = _meeting("home-appt", CHECK_IN + timedelta(hours=20), location="Dentist")
+
+    far = _router(out=LOCAL_TO_LODGING_MAX + timedelta(minutes=1))
+    assert meetings_on_trip(trips[0], [during], route=far) == {}
+
+    near = _router(out=LOCAL_TO_LODGING_MAX)
+    assert meetings_on_trip(trips[0], [during], route=near) == {"home-appt": LOCAL_TO_LODGING_MAX}
+
+
+def test_an_unroutable_or_placeless_meeting_is_not_on_the_trip():
+    """Membership only ever GRANTS an exemption, so the unknown case declines."""
+    trips = find_drive_trips(_schedule(), now=NOW, window=timedelta(days=30))
+    placeless = _meeting("no-loc", CHECK_IN + timedelta(hours=20), location=None)
+    normal = _meeting("m", CHECK_IN + timedelta(hours=20))
+    assert meetings_on_trip(trips[0], [placeless], route=_router(out=timedelta(minutes=5))) == {}
+    assert meetings_on_trip(trips[0], [normal], route=lambda o, d: None) == {}
+
+
+def test_meetings_on_trip_upper_bound_matches_the_context_window():
+    """A stay recorded past the wrapper's end extends the bound, the same
+    `max(span_end, check_out)` reading `context_from_blocks` takes — otherwise a
+    meeting the context counts as local misses the exemption it grants.
+
+    Built directly rather than through `find_drive_trips`, which cannot produce
+    this shape: it only pairs lodging records inside the wrapper's own span."""
+    late_out = CHECK_OUT + timedelta(days=3)
+    trip = DriveTrip(
+        key=TRIP_KEY,
+        summary="TN Tigers",
+        hotel=HOTEL,
+        address=HOTEL_ADDRESS,
+        check_in=CHECK_IN,
+        check_out=late_out,
+        span_start=datetime(2020, 8, 14, tzinfo=UTC),
+        span_end=datetime(2020, 8, 16, tzinfo=UTC),
+        expires=late_out + timedelta(days=2),
+    )
+    local = _router(out=timedelta(minutes=5))
+    inside_stay = _meeting("after", late_out - timedelta(hours=2))
+    assert set(meetings_on_trip(trip, [inside_stay], route=local)) == {"after"}
+
+    beyond = _meeting("beyond", late_out + timedelta(days=2))
+    assert meetings_on_trip(trip, [beyond], route=local) == {}
