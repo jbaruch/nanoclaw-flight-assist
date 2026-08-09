@@ -10,6 +10,8 @@ The sweep's immediate one-shot ask stays. It reaches the operator within half an
 
 `load_flying_trips` becomes `load_transport_gap_verdicts`, returning slug → verdict rather than a set of slugs. Its no-prior-state path is unchanged and deliberately loose: a missing, unreadable, or unrecognized-version store yields no verdicts and therefore no gap, because widening the reader must not widen the alert-storm surface. No `schema_version` bump — the record shape is untouched, so the cross-pipeline skew this reader gates on cannot open.
 
+The reader honours `expires` rather than leaning on the owner's prune. An expired record — or one whose `expires` is absent, unparseable, or naive — is residue, not a verdict, and raises no gap; a reader that depends on another skill's housekeeping having run is a reader that reports stale state. This closes the same hole on the pre-existing `fly` path.
+
 The nudge is bounded without a horizon of its own: an `unknown` verdict only exists for trips inside drive-engine's 14-day `SWEEP_WINDOW`, and the existing per-trip snooze still applies.
 
 ### Fixed — a meeting belongs to a trip by being reachable from it, not by falling on its dates (#243 review)

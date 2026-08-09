@@ -29,7 +29,7 @@ The script outputs JSON:
 
 The "отель есть, рейса нет" issue is the mirror case — a hotel booked with nothing to get there on. It fires for a trip the drive engine has settled as a flight, and — worded as a question, naming the `drive` / `fly` reply words — for one whose drive-or-fly answer is still open. A trip the operator drives to has no transport booking by design and never raises it. Both verdicts are read from drive-engine's `drive-decisions.json` (`load_transport_gap_verdicts`; wordings in `TRANSPORT_GAP_ISSUE` / `TRANSPORT_GAP_ASK_ISSUE`; owner contract in `skills/drive-engine/state-schema.md`). Do not re-derive them — an absent or unreadable store means no such gap.
 
-An open question rides this daily surface because the engine's own ask is one-shot: it stamps `asked_at` and never re-asks, so a missed notice left the trip with no drive legs and no alert (#240). Relay the issue verbatim; the operator's `drive` / `fly` reply is handled by `Skill(skill: "tessl__drive-engine")` Step 3, and either answer clears the line.
+Relay the issue verbatim. The operator's `drive` / `fly` reply is handled by `Skill(skill: "tessl__drive-engine")` Step 3; either answer clears the line. An expired verdict raises no gap.
 
 `/workspace/group/travel-db.json` is rebuilt nightly by `tessl__nightly-travel-sync` Step 4. Missing/unreadable/invalid DB → exit 1 with `{"error": "..."}` on stdout plus `check-travel-bookings: ...` on stderr. DB alerting is Step 4's responsibility. On non-zero exit, report error output and stop. On invalid JSON or missing fields, report the parse error with raw output.
 

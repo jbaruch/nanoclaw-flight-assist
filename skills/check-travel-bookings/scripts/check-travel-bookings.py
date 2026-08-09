@@ -86,7 +86,27 @@ def _schema_compatible(value) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def load_transport_gap_verdicts(path: Path | None = None) -> dict:
+def _still_active(record: dict, now: datetime) -> bool:
+    """Whether a verdict record is still in force at `now`.
+
+    `expires` is required by the writer's contract (`state-schema.md`), so a
+    record missing it, carrying an unparseable or naive one, or already past is
+    not a verdict — it is residue. Honouring it here rather than trusting the
+    owner's prune is what keeps a finished trip from nagging: the owner drops
+    expired records on its own sweep, but a reader that depends on another
+    skill's housekeeping having run is a reader that reports stale state.
+    """
+    raw = record.get("expires")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        expires = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return expires.tzinfo is not None and expires > now
+
+
+def load_transport_gap_verdicts(path: Path | None = None, *, now: datetime | None = None) -> dict:
     """Trip slug → drive-or-fly verdict, for the verdicts that are a booking gap.
 
     A READ-ONLY, non-migrating consumer of another skill's artifact
@@ -97,8 +117,10 @@ def load_transport_gap_verdicts(path: Path | None = None) -> dict:
     file is exactly the alert storm that rule forbids — under-reporting a gap is
     recoverable, a storm of false ones is not.
 
-    Returns `fly` and `unknown` verdicts (see `_GAP_VERDICTS`); `drive` is
-    omitted, since the engine is planning the drive and no flight is expected.
+    Returns `fly` and `unknown` verdicts (see `_GAP_VERDICTS`) that are still
+    active at `now` (defaults to the current UTC instant); `drive` is omitted,
+    since the engine is planning the drive and no flight is expected. An
+    expired record is dropped — see `_still_active`.
     The caller words the two differently — `fly` is a settled gap, `unknown` is
     the daily nudge that replaces a one-shot question nobody re-asked.
     """
@@ -118,12 +140,14 @@ def load_transport_gap_verdicts(path: Path | None = None) -> dict:
     trips = payload.get("trips")
     if not isinstance(trips, dict):
         return {}
+    at = now if now is not None else datetime.now(timezone.utc)
     return {
         slug: record["verdict"]
         for slug, record in trips.items()
         if isinstance(slug, str)
         and isinstance(record, dict)
         and record.get("verdict") in _GAP_VERDICTS
+        and _still_active(record, at)
     }
 
 
