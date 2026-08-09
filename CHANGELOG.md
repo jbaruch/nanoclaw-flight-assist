@@ -12,6 +12,8 @@ Moving a hotel check-in past the trip's first event erased that event. On the li
 
 Verified on the live trip: the four outer and local legs are byte-identical with check-in stamped at 16:00, 22:00, 23:00 Friday, or 01:00 Saturday.
 
+## 0.2.93 — 2026-08-09
+
 ### Changed — the outer legs no longer route through a hotel the operator drives straight past (#231 follow-up)
 
 The outbound landed at the lodging at the exact instant the first local drive left it. Zero dwell — arriving and departing together, a stop made only to leave again. On the live Gatlinburg trip that read as "drive 3h50m to the hotel, then immediately drive to the ceremony."
