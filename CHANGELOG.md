@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.92 — 2026-08-09
+
 ### Fixed — the drive home no longer leaves before the last day's event (#231 follow-up)
 
 The return leg of a flight-less trip departed at hotel check-out, stranding the operator: on the live Gatlinburg trip it drove home Aug 15 11:00 EDT and landed at 14:50, while the calendar still had a 17:47 drive from that hotel to a 18:00 game and a 22:00 drive back to it.
