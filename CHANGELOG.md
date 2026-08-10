@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.100 — 2026-08-10
+
 ### Fixed — seat-ranking defects found in review, and the ranking is now actually wired (#229)
 
 Three blocking findings from the policy reviewer on #248, all real:
