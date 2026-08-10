@@ -77,9 +77,23 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_upgrade`, `alert_recommended`, `cabins_scanned`, `cabins_absent` and `cabins_unscanned`.
+Responses carrying `error` and `detail` instead of a `verdict`:
 
-`cabins_scanned` is the whole evidence base. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
+1. `bad_request` — an unusable argument, such as an unrecognised cabin or a seat that is not a designator. `cabins_absent` rides along when the aircraft has no such cabin.
+2. `unrankable` — a seat the ranking refused. Step 6 covers it.
+3. any service fault, with `cabin_failed` and `cabins_requested` naming the cabin that did not load. Go to Step 6.
+
+`verdict: "no_held_seat"` carries `verdict` and `detail` alone. It has no `held`.
+
+Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
+
+`optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` and carries none of those three. Their absence is the contract, not a malformed response.
+
+`cabins_scanned` is the whole evidence base and `seats_compared` is its size. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
+
+`held_cabin_corroborated` is `true` when the sweep saw the held seat's row in the cabin it was assessed as, and `null` when it did not. It is never `false`: absence is not disproof. The derivation is in `skills/expertflyer/scripts/expertflyer.py`.
+
+On `null`, `row_seen_in` names the scanned cabins where the row did turn up. A non-empty list is a reason to confirm the cabin with the operator before acting on the verdict. Report the assessment either way.
 
 Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 
@@ -107,11 +121,18 @@ Never report `optimal` as "nothing better exists". The sweep reads `cabins_scann
 - Ask the operator whether the seat is a window, an aisle or a middle.
 - Pass the answer as `--held-position`.
 
+**`nothing_open`** — no open seat was found in any scanned cabin, so nothing was compared.
+
+- Say no seat is open to move to, better or worse.
+- Never report this as the held seat being best.
+- Offer to widen the sweep with `--scan-up`.
+- Check the cabin: a sold-out cabin and a seat that is not in that cabin look identical here.
+
 **`error`** — go to Step 6.
 
 - `cabin_failed` names the cabin that did not load.
 
-`no_held_seat` and `held_position_unknown` exit non-zero. Neither is an answer about the seat. Report no verdict on either.
+`no_held_seat`, `held_position_unknown` and `nothing_open` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
@@ -136,7 +157,7 @@ Report only the flights that need something:
 
 - `upgrade` → name the flight and `best_upgrade`
 - `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
-- `no_held_seat` or `held_position_unknown` → name the flight as unanswered, never as fine
+- `no_held_seat`, `held_position_unknown` or `nothing_open` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 
 A flight whose verdict never came back is not a flight with good seats. Say which ones were not answered.

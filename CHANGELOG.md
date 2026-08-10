@@ -1,5 +1,21 @@
 # Changelog
 
+### Fixed — `optimal` off an empty evidence base, and a held cabin nothing checks
+
+Both found on the first live run against the deployed service, and both let `assess` report a confident verdict it had not earned.
+
+`assess` reported `optimal` after observing **zero** open seats. Comfort+ was sold out and Premium Select is not on the aircraft, so the sweep compared the held seat against nothing and said nothing beat it. True the way "no counterexample was found" is true after looking in no drawers, and it reads as a comparison that happened. A sweep that saw no open seat now returns `nothing_open` with `seats_compared: 0`, exits non-zero, and carries no `upgrades` or `alert_recommended`.
+
+`--held-cabin` was taken on faith and still largely is, but the sweep now says how much it could confirm. `held_cabin_corroborated` is `true` when the held seat's row turned up in the cabin it was assessed as, and `null` otherwise; `row_seen_in` names the scanned cabins where the row did appear.
+
+It is never `false`, and an earlier draft of this change that refused on absence was wrong. `/seats` reports bookable seats, so a row whose every seat is occupied is missing from its own cabin's response. Cabins also split mid-row — the 739's Comfort+ ends a row later on the right — so one row number legitimately sits in two cabins. Absence is not disproof, and refusing on it would reject correct assessments.
+
+Disproof needs the cabin's row layout, which the service already parses (that is how `exit_rows` covers a sold-out exit row) and does not report. Filed as jbaruch/expertflyer-api#20.
+
+`held.why` is rendered before the early returns, so every response carrying a held seat describes it — `nothing_open` and `upgrade` alike. Only `held_position_unknown` has no position to render, and the contract says so.
+
+The output contract is now stated per response shape rather than as one flat list. Two responses carry no `verdict` at all — an unusable argument and a cabin that failed to load — and `no_held_seat` carries `verdict` without `held`. Naming them keeps an agent from reading a valid error as a malformed response.
+
 ## 0.2.106 — 2026-08-10
 
 ### Fixed — the byAir seat fields are named differently on read and on write

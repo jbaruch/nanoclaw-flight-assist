@@ -164,6 +164,12 @@ VERDICT_OPTIMAL = "optimal"
 VERDICT_UPGRADE = "upgrade"
 VERDICT_NO_HELD_SEAT = "no_held_seat"
 VERDICT_POSITION_UNKNOWN = "held_position_unknown"
+VERDICT_NOTHING_OPEN = "nothing_open"
+
+
+def _has_row(response: dict, row: int) -> bool:
+    """Whether any bookable seat in this cabin's response sits in `row`."""
+    return any(int(seat.get("row", -1)) == row for seat in response.get("seats", []))
 
 
 def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_rows) -> dict:
@@ -394,6 +400,7 @@ def _assess(args) -> dict:
         scanned[held_cabin].get("seats", []),
         scanned[held_cabin].get("exit_rows"),
     )
+    open_seats = [seat for response in scanned.values() for seat in response.get("seats", [])]
     common = {
         "flight": scanned[held_cabin].get("flight"),
         "route": scanned[held_cabin].get("route"),
@@ -403,7 +410,55 @@ def _assess(args) -> dict:
         # ones the sweep stopped short of keeps the verdict from being heard
         # as "nothing anywhere on this aircraft beats your seat".
         "cabins_unscanned": seat_quality.cabins_above(cabins[0]),
+        "seats_compared": len(open_seats),
     }
+
+    # The held seat is occupied and never appears in a response. Its row can
+    # still show up — under another passenger's seat in the same row — and that
+    # is worth surfacing. It is NOT worth refusing on: `/seats` reports bookable
+    # seats, so a row whose every seat is taken is missing from the held cabin's
+    # response while still being in it. Cabins also split mid-row (the 739's
+    # Comfort+ ends a row later on the right), so one row number legitimately
+    # appears in two cabins. Absence here is not disproof of membership, and
+    # disproving it needs the cabin's row layout the service does not yet
+    # report (jbaruch/expertflyer-api#20).
+    seen_in_held = _has_row(scanned[held_cabin], row)
+    common["held_cabin_corroborated"] = True if seen_in_held else None
+    if not seen_in_held:
+        # A hint for the agent to confirm the cabin, never a verdict.
+        common["row_seen_in"] = sorted(
+            code
+            for code, response in scanned.items()
+            if code != held_cabin and _has_row(response, row)
+        )
+
+    # A sweep that saw nothing has nothing to compare. `optimal` off an empty
+    # evidence base is true the way "no counterexample was found" is true after
+    # looking in no drawers — and it reads as a comparison that happened.
+    # Rendered before the early returns: a response that carries `held` with a
+    # known position carries its description too. Only an unknown position has
+    # nothing to render, and that shape says so.
+    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
+    if held["position"] is not None:
+        try:
+            held["why"] = seat_quality.describe(
+                held, None, seat_quality.exit_tiers([held], layout or None)
+            )
+        except seat_quality.SeatQualityError as exc:
+            return {**common, "error": "unrankable", "detail": str(exc), "held": held}
+
+    if not open_seats:
+        return {
+            **common,
+            "verdict": VERDICT_NOTHING_OPEN,
+            "held": held,
+            "detail": (
+                f"no open seat was found in {', '.join(common['cabins_scanned'])}, so nothing was "
+                f"compared against seat {args.held!r} — there is no seat to move to, better or "
+                "worse. Widen the sweep with --scan-up, or check the cabin the operator flies: a "
+                f"sold-out {held_cabin} and a seat that is not in {held_cabin} look identical here."
+            ),
+        }
     if held["position"] is None:
         return {
             **common,
@@ -419,19 +474,13 @@ def _assess(args) -> dict:
 
     # Exit rows are numbered on the aircraft, not per cabin, so recline is
     # derived from every layout the sweep saw rather than one cabin's slice.
-    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
     try:
         upgrades = [
-            seat
-            for response in scanned.values()
-            for seat in response.get("seats", [])
-            if seat_quality.is_upgrade(seat, held, None, layout or None)
+            seat for seat in open_seats if seat_quality.is_upgrade(seat, held, None, layout or None)
         ]
         ranked = seat_quality.rank_seats(upgrades, None, layout or None)
         tiers = seat_quality.exit_tiers(upgrades, layout or None)
-        held_tiers = seat_quality.exit_tiers([held], layout or None)
         described = [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
-        held["why"] = seat_quality.describe(held, None, held_tiers)
     except seat_quality.SeatQualityError as exc:
         return {**common, "error": "unrankable", "detail": str(exc), "held": held}
 
@@ -494,7 +543,13 @@ def run(args) -> dict:
 # Verdicts that decline to answer. They are not service faults, but treating
 # them as success invites the caller to read a missing verdict as "nothing
 # better is open" — the exact misreport this command exists to prevent.
-UNANSWERED = frozenset({VERDICT_NO_HELD_SEAT, VERDICT_POSITION_UNKNOWN})
+UNANSWERED = frozenset(
+    {
+        VERDICT_NO_HELD_SEAT,
+        VERDICT_POSITION_UNKNOWN,
+        VERDICT_NOTHING_OPEN,
+    }
+)
 
 
 def main(argv=None) -> int:

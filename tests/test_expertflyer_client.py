@@ -710,7 +710,14 @@ def test_a_better_cabin_is_reported_as_the_upgrade(cabins):
 
 def test_a_comfort_plus_window_never_upgrades_the_first_seat_held(cabins):
     """1A on DL2714, with Comfort+ open further back. The ladder decides."""
-    cabins["F"] = _cabin("F", [{"label": "3C", "row": 3, "column": "C", "position": "aisle"}])
+    cabins["F"] = _cabin(
+        "F",
+        [
+            {"label": "3C", "row": 3, "column": "C", "position": "aisle"},
+            # Row 1 seen in F corroborates the held cabin, so no downward probe.
+            {"label": "1C", "row": 1, "column": "C", "position": "aisle"},
+        ],
+    )
     out = client.run(
         client.parse_args(
             [
@@ -842,7 +849,9 @@ def test_an_unknown_held_cabin_never_reaches_the_service(cabins):
 
 
 def test_scan_width_controls_how_many_cabins_are_requested(cabins):
-    cabins["W"] = _cabin("W", [])
+    # Row 21 seen in W corroborates the held cabin, so the width is the only
+    # thing deciding how many requests go out.
+    cabins["W"] = _cabin("W", [{"label": "21B", "row": 21, "column": "B", "position": "middle"}])
     out = _assess(held="21F", held_position="window", scan_up=0)
     assert cabins["_asked"] == ["W"]
     assert out["cabins_scanned"] == ["W"]
@@ -881,7 +890,9 @@ def test_a_held_middle_with_only_middles_open_stays_optimal(cabins):
 def test_optimal_names_the_cabins_it_never_looked_at(cabins):
     """A one-rung sweep from Main cannot see Business, so `optimal` scoped to
     the whole aircraft would be a false verdict."""
-    cabins["Y"] = _cabin("Y", [])
+    # One open seat that loses to the held one, so the sweep has an evidence
+    # base and the verdict is a real comparison rather than an empty one.
+    cabins["Y"] = _cabin("Y", [{"label": "40B", "row": 40, "column": "B", "position": "middle"}])
     cabins["W"] = _cabin("W", [])
     out = client.run(
         client.parse_args(
@@ -908,7 +919,7 @@ def test_optimal_names_the_cabins_it_never_looked_at(cabins):
 
 
 def test_a_sweep_reaching_the_top_leaves_nothing_unscanned(cabins):
-    cabins["F"] = _cabin("F", [])
+    cabins["F"] = _cabin("F", [{"label": "4B", "row": 4, "column": "B", "position": "middle"}])
     out = client.run(
         client.parse_args(
             [
@@ -929,3 +940,151 @@ def test_a_sweep_reaching_the_top_leaves_nothing_unscanned(cabins):
         )
     )
     assert out["cabins_unscanned"] == []
+
+
+# --- the sweep needs something to compare against ----------------------------
+
+
+def test_a_sweep_that_saw_no_open_seat_reports_that_not_optimal(cabins):
+    """The live DL2957 case: Comfort+ sold out, Premium Select not on the
+    aircraft, and `optimal` reported off zero observed seats."""
+    cabins["W"] = _cabin("W", [])
+    cabins["A"] = _cabin("A", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_NOTHING_OPEN
+    assert out["seats_compared"] == 0
+    assert "nothing was compared" in out["detail"]
+    assert "upgrades" not in out
+    assert "alert_recommended" not in out
+
+
+def test_nothing_open_exits_non_zero(capsys, cabins):
+    cabins["W"] = _cabin("W", [])
+    code = client.main(
+        [
+            "assess",
+            "--airline",
+            "DL",
+            "--flight",
+            "2957",
+            "--date",
+            "2024-03-05",
+            "--held-cabin",
+            "W",
+            "--held",
+            "21F",
+            "--held-position",
+            "window",
+        ]
+    )
+    assert code == 1
+    assert "nothing was compared" in capsys.readouterr().err
+
+
+def test_one_open_seat_is_evidence_enough_to_answer(cabins):
+    cabins["W"] = _cabin("W", [{"label": "40B", "row": 40, "column": "B", "position": "middle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert out["seats_compared"] == 1
+
+
+# --- the held seat is not in the cabin it was said to be in ------------------
+
+
+def test_a_corroborated_cabin_says_so(cabins):
+    cabins["W"] = _cabin("W", [{"label": "21B", "row": 21, "column": "B", "position": "middle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is True
+    assert "cabins_probed" not in out
+    assert "cabin_probe_failed" not in out
+
+
+def test_the_pre_assessment_shapes_carry_no_verdict_or_held(cabins):
+    """Step 3 documents three responses that precede any assessment. An agent
+    reading them as malformed is the failure this pins."""
+    bad_cabin = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "sky club",
+                "--held",
+                "21F",
+            ]
+        )
+    )
+    assert bad_cabin["error"] == "bad_request"
+    assert "verdict" not in bad_cabin and "held" not in bad_cabin
+
+    cabins["W"] = {"error": "blocked", "detail": "bot wall"}
+    failed = _assess(held="21F", held_position="window")
+    assert failed["cabin_failed"] == "A" or failed["cabin_failed"] == "W"
+    assert "verdict" not in failed and "held" not in failed
+
+    none_held = _assess()
+    assert none_held["verdict"] == client.VERDICT_NO_HELD_SEAT
+    assert "held" not in none_held and "cabins_scanned" not in none_held
+
+
+def test_the_aircraft_lacking_the_held_cabin_reports_which_were_absent(cabins):
+    cabins["W"] = _cabin("W", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["error"] == "bad_request"
+    assert "W" in out["cabins_absent"] or out["cabins_absent"] == ["A", "W"]
+    assert "verdict" not in out
+
+
+# --- the held seat's cabin: corroborate, never disprove -----------------------
+
+
+def test_a_row_seen_in_the_held_cabin_corroborates_it(cabins):
+    cabins["W"] = _cabin("W", [{"label": "21B", "row": 21, "column": "B", "position": "middle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is True
+    assert "row_seen_in" not in out
+
+
+def test_a_row_absent_from_the_held_cabin_is_never_disproof(cabins):
+    """`/seats` reports bookable seats, so a row whose every seat is taken is
+    missing from the response while still being in the cabin. Refusing on that
+    would reject a correct assessment."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is None
+    assert out["row_seen_in"] == []
+    # Still a real verdict — absence of evidence is not a refusal.
+    assert out["verdict"] == client.VERDICT_UPGRADE
+
+
+def test_a_row_seen_elsewhere_is_a_hint_not_a_verdict(cabins):
+    """Cabins split mid-row — the 739's Comfort+ ends a row later on the right
+    — so one row number legitimately appears in two cabins."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    cabins["A"] = _cabin("A", [{"label": "21D", "row": 21, "column": "D", "position": "aisle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is None
+    assert out["row_seen_in"] == ["A"]
+    assert out["verdict"] in (client.VERDICT_OPTIMAL, client.VERDICT_UPGRADE)
+
+
+def test_every_shape_carrying_a_held_seat_describes_it(cabins):
+    """Step 3 promises `held.why` on every shape but `held_position_unknown`."""
+    cabins["W"] = _cabin("W", [], present=True)
+    nothing = _assess(held="21F", held_position="window")
+    assert nothing["verdict"] == client.VERDICT_NOTHING_OPEN
+    assert nothing["held"]["why"] == "21F (window)"
+
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    upgrade = _assess(held="21F", held_position="window")
+    assert upgrade["held"]["why"] == "21F (window)"
+
+    cabins["W"] = _cabin("W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}])
+    unknown = _assess(held="21F")
+    assert unknown["verdict"] == client.VERDICT_POSITION_UNKNOWN
+    assert "why" not in unknown["held"]
