@@ -132,14 +132,25 @@ def _rank(result: dict) -> dict:
     # Without it the seats list holds bookable seats only, so an occupied rear
     # exit row is invisible and nothing is claimed to recline.
     layout = result.get("exit_rows")
-    tiers = seat_quality.exit_tiers(result["seats"], layout)
-    ranked = seat_quality.rank_seats(result["seats"], cabin, layout)
-    result["ranked"] = [{**s, "why": seat_quality.describe(s, cabin, tiers)} for s in ranked]
-    best = ranked[0] if ranked else None
-    result["best"] = seat_quality.describe(best, cabin, tiers) if best else None
-    # Every open seat may still be unacceptable — a cabin of middles ranks to
-    # nothing even though `available_total` is non-zero.
-    result["acceptable_total"] = len(ranked)
+    try:
+        tiers = seat_quality.exit_tiers(result["seats"], layout)
+        ranked = seat_quality.rank_seats(result["seats"], cabin, layout)
+        result["ranked"] = [{**s, "why": seat_quality.describe(s, cabin, tiers)} for s in ranked]
+        best = ranked[0] if ranked else None
+        result["best"] = seat_quality.describe(best, cabin, tiers) if best else None
+        # Every open seat may still be unacceptable — a cabin of middles ranks
+        # to nothing even though `available_total` is non-zero.
+        result["acceptable_total"] = len(ranked)
+    except seat_quality.SeatQualityError as exc:
+        # A seat the ranker refuses to order is a reportable answer, not a
+        # traceback: the service replied, and the operator needs to read WHICH
+        # seat could not be ranked. Dropping `best`/`ranked` is deliberate —
+        # a partial ranking would read as a complete one.
+        result.pop("ranked", None)
+        result.pop("best", None)
+        result.pop("acceptable_total", None)
+        result["error"] = "unrankable"
+        result["detail"] = str(exc)
     return result
 
 

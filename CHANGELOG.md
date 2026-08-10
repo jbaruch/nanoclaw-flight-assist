@@ -1,5 +1,17 @@
 # Changelog
 
+### Fixed — First, Delta One and Premium Select ranked below Comfort+
+
+`_cabin_rank` scored `W` at 1 and every other cabin at 0, so First (`F`), Delta One (`C`) and Premium Select (`A`) tied with the Main Cabin. Cabin is the first key in the sort tuple, so a Comfort+ window in row 30 outranked the First seat already held in row 1 — and `is_upgrade` would have reported it as an upgrade worth moving to. Found while wiring the held-seat comparison; the live case is 1A on DL2714 with Comfort+ open further back.
+
+Cabins now rank on the full ladder from `references/web-contract.md`: `F` > `C` > `A` > `W` > `Y`. `cabin_code()` resolves the operator's words ("Delta One", "premium select", "coach") to the service's codes, so a held cabin stated in prose compares against the right rung. Premium economy stays `A` and never collapses into `W` — they are different cabins one rung apart.
+
+An unrecognised cabin raises rather than scoring as Main Cabin. Silently ranking an unknown premium cabin at the bottom is how a downgrade gets reported as an upgrade, which is the defect this entry describes.
+
+`expertflyer.py` reports a refused ranking as `{"error": "unrankable"}` with the offending seat named, rather than letting `SeatQualityError` reach the operator as a traceback — the ranker now raises on the production path where it previously could not. `ranked`, `best` and `acceptable_total` are dropped from that response so a partial ranking cannot read as a complete one.
+
+A seat whose `position` is present but unrecognised now says so, naming the value. It previously reported "no window/aisle/middle flag", which sends the operator to look for a missing field when the field is there with a word the ranker does not know.
+
 ## 0.2.103 — 2026-08-10
 
 ### Fixed — a TLS verification failure no longer reports as an unreachable service (#229)

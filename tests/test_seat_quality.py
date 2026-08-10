@@ -23,6 +23,7 @@ def _load(name: str, relpath: str):
 sq = _load("seat_quality", "skills/expertflyer/scripts/seat_quality.py")
 
 W, Y = sq.COMFORT_PLUS, sq.MAIN_CABIN
+F, C, A = sq.FIRST, sq.BUSINESS, sq.PREMIUM_ECONOMY
 
 
 def seat(row, label, position, *, exit_row=False, reclines=False, bulkhead=False):
@@ -380,3 +381,58 @@ def test_upgrade_without_a_layout_does_not_invent_a_recline():
     held = exit_seat(20, cabin=Y)
     opened = exit_seat(21, cabin=Y)
     assert sq.is_upgrade(opened, held, Y) is False
+
+
+# --- the cabin ladder --------------------------------------------------------
+
+
+def test_cabins_rank_on_the_full_ladder_not_comfort_plus_versus_the_rest():
+    """First > Delta One > Premium Select > Comfort+ > Main Cabin.
+
+    Scoring only Comfort+ above zero put every premium cabin level with Main,
+    so a Comfort+ seat outranked the First seat already held.
+    """
+    ladder = [F, C, A, W, Y]
+    scores = [sq.CABIN_SCORE[code] for code in ladder]
+    assert scores == sorted(scores, reverse=True)
+    assert len(set(scores)) == len(ladder)
+
+
+def test_a_comfort_plus_window_does_not_beat_the_first_seat_already_held():
+    """The live case: 1A on DL2714, with Comfort+ windows open further back."""
+    held_first = {"label": "1A", "row": 1, "position": "window", "cabin": F}
+    open_comfort = {"label": "10A", "row": 10, "position": "window", "cabin": W}
+    assert sq.is_upgrade(open_comfort, held_first) is False
+    assert sq.is_upgrade(held_first, open_comfort) is True
+
+
+def test_every_premium_cabin_outranks_comfort_plus():
+    comfort_window = {"label": "10A", "row": 10, "position": "window", "cabin": W}
+    for better in (A, C, F):
+        far_back_aisle = {"label": "40C", "row": 40, "position": "aisle", "cabin": better}
+        assert sq.is_upgrade(far_back_aisle, comfort_window) is True
+
+
+def test_premium_economy_is_premium_select_never_comfort_plus():
+    """`A` and `W` are different cabins that both get called 'premium'."""
+    assert sq.cabin_code("premium economy") == A
+    assert sq.cabin_code("premium select") == A
+    assert sq.cabin_code("comfort+") == W
+    assert sq.CABIN_SCORE[A] > sq.CABIN_SCORE[W]
+
+
+def test_the_operator_s_words_resolve_to_the_service_s_codes():
+    assert sq.cabin_code("Delta One") == C
+    assert sq.cabin_code("main cabin") == Y
+    assert sq.cabin_code("coach") == Y
+    # A code passes through whatever its case.
+    assert sq.cabin_code("w") == W
+    assert sq.cabin_code(" F ") == F
+
+
+def test_an_unknown_cabin_raises_rather_than_scoring_as_main():
+    """Scoring an unknown cabin at 0 reports a downgrade as an upgrade."""
+    with pytest.raises(sq.SeatQualityError):
+        sq.cabin_code("sky club")
+    with pytest.raises(sq.SeatQualityError):
+        sq.seat_sort_key({"label": "2A", "row": 2, "position": "window", "cabin": "P"})
