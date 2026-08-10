@@ -77,7 +77,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Do not ask for the cabin, and never read one out of byAir. byAir's `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the distinction the assessment turns on. Omit `--held-cabin` and the cabin is resolved from the aircraft. `held_cabin_from` reports whether it was `stated` or `resolved`.
+Do not ask for the cabin. Never read one out of byAir: its `seat_class` does not distinguish Comfort+ from Main Cabin. Omit `--held-cabin` and the cabin is resolved from the aircraft. `held_cabin_from` reports `stated` or `resolved`.
 
 Pass `--held-cabin` only when the operator names a cabin themselves, or when a response asks for it.
 

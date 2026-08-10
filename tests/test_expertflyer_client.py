@@ -1554,3 +1554,89 @@ def test_a_row_in_one_cabin_only_still_resolves_without_asking(cabins):
     assert out["held"]["cabin"] == "Y"
     assert out["held_cabin_from"] == "resolved"
     assert out["verdict"] == client.VERDICT_OPTIMAL
+
+
+def test_a_neighbour_that_failed_is_not_evidence_the_row_is_unshared(cabins):
+    """Reading a failure as "not shared" assigns the seat to the lower cabin,
+    and at --scan-up 0 the sweep never fetches it again to notice."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = {"error": "blocked", "detail": "bot wall"}
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["error"] == "blocked"
+    assert out["cabin_failed"] == "W"
+    assert "shared with Y" in out["detail"]
+    assert "verdict" not in out
+
+
+def test_a_neighbour_without_rows_cannot_rule_out_a_split(cabins):
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = _cabin("W", [])  # older service: no `rows`
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["error"] == "bad_request"
+    assert "--held-cabin" in out["detail"]
+    assert "verdict" not in out
+
+
+def test_a_neighbour_the_aircraft_lacks_rules_out_the_split(cabins):
+    """An absent cabin is a real answer: it holds no rows at all."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y", [{"label": "22A", "row": 22, "column": "A", "position": "window"}], list(range(11, 33))
+    )
+    cabins["W"] = _cabin("W", [], present=False)
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "Y"
+    assert out["held_cabin_from"] == "resolved"

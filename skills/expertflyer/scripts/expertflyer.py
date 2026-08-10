@@ -425,11 +425,33 @@ def _assess(args) -> dict:
                 above = seat_quality.cabins_above(candidate)
                 if not above:
                     break
-                neighbour = fetch(above[-1])
-                if "error" not in neighbour and row in {
-                    int(r) for r in (neighbour.get("rows") or [])
-                }:
-                    holders.append(above[-1])
+                neighbour_cabin = above[-1]
+                neighbour = fetch(neighbour_cabin)
+                # A neighbour that did not answer is not evidence the row is
+                # unshared. Reading it that way assigns the seat to the lower
+                # cabin off a failure, and at --scan-up 0 the sweep never
+                # fetches it again to notice.
+                if "error" in neighbour:
+                    return {
+                        "error": neighbour["error"],
+                        "detail": (
+                            f"{neighbour_cabin}: {neighbour.get('detail', neighbour['error'])} "
+                            f"— read to check whether row {row} is shared with {candidate}"
+                        ),
+                        "cabin_failed": neighbour_cabin,
+                    }
+                if neighbour.get("cabin_present") is not False:
+                    if neighbour.get("rows") is None:
+                        return {
+                            "error": "bad_request",
+                            "detail": (
+                                f"{neighbour_cabin} reports no rows, so whether row {row} is "
+                                f"shared with {candidate} cannot be established — pass "
+                                "--held-cabin"
+                            ),
+                        }
+                    if row in {int(r) for r in neighbour["rows"]}:
+                        holders.append(neighbour_cabin)
                 break
         if len(holders) != 1:
             return {
