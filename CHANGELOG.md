@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.107 — 2026-08-10
+
 ### Fixed — `optimal` off an empty evidence base, and a held cabin nothing checks
 
 Both found on the first live run against the deployed service, and both let `assess` report a confident verdict it had not earned.
