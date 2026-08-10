@@ -394,6 +394,7 @@ def test_a_flight_missing_on_the_utc_date_is_retried_on_the_previous_day(monkeyp
     calls = []
 
     def fake(method, path, params=None, body=None):
+        assert params is not None
         calls.append(params["date"])
         if params["date"] == "2024-03-07":
             return {"error": "error", "detail": "could not resolve a route for DL9"}
@@ -409,6 +410,7 @@ def test_the_fallback_can_be_suppressed(monkeypatch):
     calls = []
 
     def fake(method, path, params=None, body=None):
+        assert params is not None
         calls.append(params["date"])
         return {"error": "error", "detail": "could not resolve a route for DL9"}
 
@@ -423,6 +425,7 @@ def test_an_unrelated_error_is_not_retried(monkeypatch):
     calls = []
 
     def fake(method, path, params=None, body=None):
+        assert params is not None
         calls.append(params["date"])
         return {"error": "auth", "detail": "session expired"}
 
@@ -435,6 +438,7 @@ def test_a_successful_first_try_is_not_retried(monkeypatch):
     calls = []
 
     def fake(method, path, params=None, body=None):
+        assert params is not None
         calls.append(params["date"])
         return {"cabin": "W", "seats": [], "available_total": 0}
 
@@ -448,6 +452,7 @@ def test_a_failed_retry_reports_its_own_error_not_the_first_one(monkeypatch):
     """An expired session on the retry must not surface as "no such flight"."""
 
     def fake(method, path, params=None, body=None):
+        assert params is not None
         if params["date"] == "2024-03-07":
             return {"error": "error", "detail": "could not resolve a route for DL9"}
         return {"error": "auth", "detail": "session expired"}
@@ -464,6 +469,7 @@ def test_a_malformed_date_reports_rather_than_tracebacks(monkeypatch):
     """The retry must not crash computing the previous day."""
 
     def fake(method, path, params=None, body=None):
+        assert params is not None
         return {"error": "error", "detail": "could not resolve a route for DL9"}
 
     monkeypatch.setattr(client, "_request", fake)
