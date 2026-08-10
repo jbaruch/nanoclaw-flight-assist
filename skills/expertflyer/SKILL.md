@@ -81,13 +81,32 @@ Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_
 
 Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 
-1. `optimal` — nothing open beats the held seat. Say so and name `held.why`. Offer the alert (Step 5) on the cabins in `cabins_scanned`.
-2. `upgrade` — name `best_upgrade`, so the operator can take it in the airline's app. Offer no alert.
-3. `no_held_seat` — no seat was passed. Go get it from byAir or from the operator. Report nothing about seat quality.
-4. `held_position_unknown` — the seat map does not say what the column is. Ask the operator whether the seat is a window, an aisle or a middle. Pass it as `--held-position`.
-5. `error` — go to Step 6. `cabin_failed` names the cabin that did not load.
+**`optimal`** — nothing open beats the held seat.
 
-Verdicts 3 and 4 exit non-zero. Neither is an answer about the seat, so do not report one.
+- Say so.
+- Name `held.why`.
+- Offer the alert (Step 5) on the cabins in `cabins_scanned`.
+
+**`upgrade`** — something open beats it.
+
+- Name `best_upgrade`.
+- Offer no alert.
+
+**`no_held_seat`** — no seat was passed.
+
+- Get it from byAir, or from the operator.
+- Report nothing about seat quality.
+
+**`held_position_unknown`** — the seat map does not say what the column is.
+
+- Ask the operator whether the seat is a window, an aisle or a middle.
+- Pass the answer as `--held-position`.
+
+**`error`** — go to Step 6.
+
+- `cabin_failed` names the cabin that did not load.
+
+`no_held_seat` and `held_position_unknown` exit non-zero. Neither is an answer about the seat. Report no verdict on either.
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 

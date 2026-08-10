@@ -487,6 +487,15 @@ def test_something_that_is_not_a_seat_designator_raises():
             sq.parse_seat_label(bad)
 
 
+def test_row_zero_is_rejected_rather_than_ranked_ahead_of_row_one():
+    """Row 0 parses as a number and sorts ahead of every real row, so a
+    mistyped seat would report the whole aircraft as worse than it."""
+    for bad in ("0A", "00C", "0F"):
+        with pytest.raises(sq.SeatQualityError, match="start at 1"):
+            sq.parse_seat_label(bad)
+    assert sq.parse_seat_label("1A") == (1, "A")
+
+
 def test_the_held_seat_s_position_is_read_off_the_open_seats_beside_it():
     """The held seat is occupied, so it is never in the service's response.
     The aircraft still states what column F is, on every open seat."""

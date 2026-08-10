@@ -110,13 +110,24 @@ _LABEL_RE = re.compile(r"^(\d{1,3})\s*([A-Z]{1,2})$")
 
 
 def parse_seat_label(label: str) -> tuple[int, str]:
-    """Row and column from a seat designator, e.g. '21F' -> (21, 'F')."""
+    """Row and column from a seat designator, e.g. '21F' -> (21, 'F').
+
+    Rows are numbered from 1. Row 0 parses as a number and then sorts ahead of
+    row 1, so a mistyped seat would rank as the furthest-forward seat on the
+    aircraft and report every real seat as worse than it.
+    """
     match = _LABEL_RE.match(str(label).strip().upper())
     if not match:
         raise SeatQualityError(
             f"{label!r} is not a seat designator — pass a row and column like 21F or 1A"
         )
-    return int(match.group(1)), match.group(2)
+    row = int(match.group(1))
+    if row < 1:
+        raise SeatQualityError(
+            f"{label!r} is row {row}, and seat rows start at 1 — pass the seat as printed "
+            "on the boarding pass, e.g. 21F"
+        )
+    return row, match.group(2)
 
 
 def column_positions(seats) -> dict[str, str]:
