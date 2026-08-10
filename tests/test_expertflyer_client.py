@@ -1343,3 +1343,128 @@ def test_nothing_is_recommended_when_every_watchable_cabin_has_a_seat(cabins):
     )
     assert out["alert_cabins"] == []
     assert out["alert_recommended"] is False
+
+
+# --- the cabin is resolved, not asked for ------------------------------------
+
+
+def test_the_cabin_is_read_off_the_aircraft_when_not_stated(cabins):
+    """byAir stores the seat and no cabin the assessment can use, so the
+    operator would otherwise have to look it up. `rows` already knows."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y",
+        [{"label": "22A", "row": 22, "column": "A", "position": "window"}],
+        list(range(16, 33)),
+        exit_rows=[19, 20, 21],
+    )
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "Y"
+    assert out["held_cabin_from"] == "resolved"
+    assert out["held_cabin_corroborated"] is True
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    # Main first — where most seats are — so the common case costs one request
+    # before the sweep, and the sweep reuses it.
+    assert cabins["_asked"] == ["Y", "W"]
+
+
+def test_resolution_walks_up_until_it_finds_the_row(cabins):
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(16, 33)))
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    cabins["A"] = _cabin_with_rows(
+        "A", [{"label": "6A", "row": 6, "column": "A", "position": "window"}], list(range(6, 10))
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "7C",
+                "--held-position",
+                "aisle",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "A"
+    assert out["held_cabin_from"] == "resolved"
+    assert cabins["_asked"][:3] == ["Y", "W", "A"]
+
+
+def test_a_stated_cabin_skips_resolution_entirely(cabins):
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 21)))
+    out = _assess(held="12F", held_position="window")
+    assert out["held_cabin_from"] == "stated"
+    assert "Y" not in cabins["_asked"]
+
+
+def test_a_seat_on_no_cabin_of_this_aircraft_is_reported(cabins):
+    """Row 88 is nobody's row: the seat or the flight is wrong."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(16, 33)))
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "88A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert "no cabin on this aircraft has a row 88" in out["detail"]
+    assert "upgrades" not in out
+
+
+def test_resolution_needs_the_service_to_report_rows(cabins):
+    """An older expertflyer-api cannot answer this, and guessing the cabin is
+    the defect the resolution exists to remove."""
+    cabins["Y"] = _cabin("Y", [{"label": "22A", "row": 22, "column": "A", "position": "window"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["error"] == "bad_request"
+    assert "--held-cabin" in out["detail"]

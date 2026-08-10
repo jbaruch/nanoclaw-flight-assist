@@ -70,16 +70,16 @@ Step 2 answers what is open. It does not answer whether any of it beats the seat
 ```bash
 python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py assess \
     --airline DL --flight 2957 --date 2026-08-11 \
-    --held 21F --held-cabin "comfort+" --held-position window
+    --held 21F --held-position window
 ```
 
-`--held` is the seat currently assigned. `--held-cabin` is the cabin it is in. `--held-position` is `window`, `aisle` or `middle`; omit it and the column is read off the open seats in the same cabin. `--scan-up` sets how many cabins above the held one to include — the default and its cost are in `skills/expertflyer/scripts/expertflyer.py`.
+`--held` is the seat currently assigned. `--held-cabin` is optional; omit it and the cabin is resolved from the aircraft's row extents. `--held-position` is `window`, `aisle` or `middle`; omit it and the column is read off the open seats in the same cabin. `--scan-up` sets how many cabins above the held one to include — the default and its cost are in `skills/expertflyer/scripts/expertflyer.py`.
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-byAir carries no cabin the assessment can use. Its `seat_class` is business, premium economy or economy, and Comfort+ and Main Cabin are both economy — the one distinction `--held-cabin` exists to make. Ask the operator for the cabin in the names Step 2 lists, and never read it back out of byAir.
+Do not ask for the cabin, and never read one out of byAir. byAir's `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the distinction the assessment turns on. Omit `--held-cabin` and the cabin is resolved from the aircraft. `held_cabin_from` reports whether it was `stated` or `resolved`.
 
-One ask covers both: the seat and the cabin it is in. A seat without a cabin cannot be assessed, so asking for the seat alone buys a second round trip.
+Pass `--held-cabin` only when the operator names a cabin themselves, or when a response asks for it.
 
 Responses carrying `error` and `detail` instead of a `verdict`:
 
@@ -87,9 +87,9 @@ Responses carrying `error` and `detail` instead of a `verdict`:
 2. `unrankable` — a seat the ranking refused. Step 6 covers it.
 3. any service fault, with `cabin_failed` and `cabins_requested` naming the cabin that did not load. Go to Step 6.
 
-`verdict: "no_held_seat"` carries `verdict` and `detail` alone. It has no `held`.
+`verdict: "no_held_seat"` carries `verdict` and `detail` alone; `held_cabin_unresolved` adds `cabins_absent`. Neither carries `held`.
 
-Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
+Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared`, `held_cabin_from` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
 
 `optimal` and `upgrade` add `upgrades`, `best_upgrade`, `cabin_openings`, `alert_recommended` and `alert_cabins`. Every other verdict adds `detail` and carries none of those five. Their absence is the contract, not a malformed response.
 
@@ -101,7 +101,7 @@ Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent
 
 `cabins_scanned` is the whole evidence base, `seats_compared` is its size, and `acceptable_by_cabin` breaks it down per cabin into seats worth taking. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up` to see further, which does not widen `alert_cabins`.
 
-`held_cabin_corroborated` is `true` when the held seat's row is in the cabin it was assessed as, `false` when it is not, and `null` when the service could not settle it. `held_cabin_source` says which answered: `rows` is the cabin's own extent and decides it either way, `seats` is the older availability-derived fallback and can only ever confirm. Derivation is in `skills/expertflyer/scripts/expertflyer.py`.
+`held_cabin_corroborated` is `true` when the held seat's row is in the cabin it was assessed as, `false` when it is not, and `null` when the service could not settle it. `held_cabin_from` says where the cabin came from: `stated` from `--held-cabin`, `resolved` from the aircraft's row extents. `held_cabin_source` says which evidence checked it: `rows` is the cabin's own extent and decides it either way, `seats` is the older availability-derived fallback and can only ever confirm. Derivation is in `skills/expertflyer/scripts/expertflyer.py`.
 
 On `null`, `row_seen_in` names the scanned cabins where the row did turn up. A non-empty list is a reason to confirm the cabin with the operator before acting on the verdict. Report the assessment either way.
 
@@ -128,7 +128,12 @@ Never say the held seat beat a cabin. `optimal` compares it against the seats th
 **`no_held_seat`** — no seat was passed.
 
 - Get the seat from byAir, or from the operator.
-- Get the cabin from the operator.
+- Report nothing about seat quality.
+
+**`held_cabin_unresolved`** — no cabin on the aircraft holds that row.
+
+- Relay `detail`.
+- Check the seat and the flight with the operator.
 - Report nothing about seat quality.
 
 **`held_position_unknown`** — the seat map does not say what the column is.
@@ -153,7 +158,7 @@ Never say the held seat beat a cabin. `optimal` compares it against the seats th
 
 - `cabin_failed` names the cabin that did not load.
 
-`no_held_seat`, `held_position_unknown`, `nothing_open` and `held_cabin_mismatch` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
+`no_held_seat`, `held_position_unknown`, `nothing_open`, `held_cabin_mismatch` and `held_cabin_unresolved` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
@@ -176,7 +181,7 @@ The pass covers the next trip. `--trips N` widens it to the next N; `--trips 0` 
 
 `count: 0` with a non-empty `excluded` means no upcoming trip covers those flights. Report that rather than reporting nothing.
 
-Collect the held seat and cabin for every flight in one exchange before assessing any of them. Read each seat from byAir. Ask the operator once, in a single message, for every flight byAir has no seat for, and for the cabin on every flight — byAir does not carry one the assessment can use. Write the seats back to byAir. Do not write the cabins.
+Collect the held seat for every flight in one exchange before assessing any of them. Read each from byAir. Ask the operator once, in a single message, for every flight byAir has no seat for. Write each answer back to byAir. Ask for no cabins — Step 3 resolves them.
 
 Then run Step 3 once per flight, adding `--date-fallback`. Read `date_fallback_applied` to see which date answered. Do not pass it in Step 3 for a date the operator named.
 
@@ -185,7 +190,7 @@ Report only the flights that need something:
 - `upgrade` → name the flight and `best_upgrade`
 - `cabin_openings` non-empty → name the cabin and seat, and say it needs a fare change or an upgrade, never a seat selection
 - `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
-- `no_held_seat`, `held_position_unknown`, `nothing_open` or `held_cabin_mismatch` → name the flight as unanswered, never as fine
+- `no_held_seat`, `held_position_unknown`, `nothing_open`, `held_cabin_mismatch` or `held_cabin_unresolved` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 
 A flight whose verdict never came back is not a flight with good seats. Say which ones were not answered.

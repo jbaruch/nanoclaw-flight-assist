@@ -1,12 +1,14 @@
 # Changelog
 
-### Changed — the seat ask covers the cabin too, and byAir is not asked for it
+### Changed — the held seat's cabin is resolved, not asked for
 
-byAir stores the seat and not the cabin the assessment needs. Its `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the one distinction `--held-cabin` exists to make, and the one that had seat 21F assessed against the wrong cabin.
+byAir stores the seat and no cabin the assessment can use. Its `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the distinction the whole assessment turns on, and the one that had seat 21F judged against the wrong cabin.
 
-Reading a cabin back out of that field would round-trip a value that cannot tell those two apart, so the skill does not write it and does not read it. The cabin is asked for in the names Step 2 lists, and the row-extent check verifies the answer.
+Asking the operator for it was the obvious repair and the wrong one. The cabin is a fact about the aircraft, and `rows` from `/seats` (jbaruch/expertflyer-api#20) already states it: every row of a cabin, sold out or not. `--held-cabin` is now optional, and omitting it resolves the cabin by reading from the bottom of the ladder up. Most seats are in the Main Cabin, so the common case costs one request, and the sweep reuses every response the resolution fetched.
 
-The ask now covers seat and cabin together. A seat without a cabin cannot be assessed, so asking for the seat alone only bought a second round trip.
+`held_cabin_from` reports `stated` or `resolved`, separately from `held_cabin_corroborated`, which reports how it was checked.
+
+A row no cabin on the aircraft holds returns `held_cabin_unresolved` rather than a verdict. The seat or the flight is wrong, and assessing it against a guessed cabin is what this replaces. A service without `rows` cannot resolve, and says so rather than guessing.
 
 ### Fixed — a seat in a better cabin was reported as one to go and take
 
