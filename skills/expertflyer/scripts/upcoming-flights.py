@@ -53,11 +53,20 @@ def parse_args(argv=None):
 
 
 def _parse_instant(value: str) -> datetime:
-    text = value.strip().replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(text)
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ScheduleError(
+            f"{value!r} is not an ISO-8601 instant — expected e.g. 2026-08-09T00:00:00Z"
+        ) from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+class ScheduleError(ValueError):
+    """A malformed schedule or reference instant, reported not raised."""
 
 
 def flight_from_event(event: dict) -> dict | None:
@@ -71,7 +80,12 @@ def flight_from_event(event: dict) -> dict | None:
     start = event.get("start")
     if not start:
         return None
-    departs = _parse_instant(str(start))
+    try:
+        departs = _parse_instant(str(start))
+    except ScheduleError:
+        # One unparseable timestamp should not lose the whole schedule; the
+        # event is skipped exactly as an unparseable summary is.
+        return None
     return {
         "airline": airline,
         "flight": number,
@@ -127,8 +141,24 @@ def main(argv=None) -> int:
 
     if isinstance(events, dict):
         events = events.get("events") or events.get("items") or []
+    if not isinstance(events, list):
+        # A valid JSON scalar parses fine and then explodes on iteration.
+        print(json.dumps({"error": "bad_schedule", "detail": "root is not a list of events"}))
+        print(
+            f"upcoming-flights: {path} parsed but is a "
+            f"{type(events).__name__}, not a list of events",
+            file=sys.stderr,
+        )
+        return 1
 
-    flights = upcoming_flights(events, _parse_instant(args.now), args.min_lead_hours)
+    try:
+        now = _parse_instant(args.now)
+    except ScheduleError as exc:
+        print(json.dumps({"error": "bad_now", "detail": str(exc)}))
+        print(f"upcoming-flights: {exc}", file=sys.stderr)
+        return 1
+
+    flights = upcoming_flights(events, now, args.min_lead_hours)
     print(json.dumps({"flights": flights, "count": len(flights)}))
     return 0
 

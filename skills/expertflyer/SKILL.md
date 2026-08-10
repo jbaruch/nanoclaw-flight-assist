@@ -1,6 +1,6 @@
 ---
 name: expertflyer
-description: Check seat availability or fare-class (upgrade) inventory on a specific flight via the operator's ExpertFlyer account, and create an ExpertFlyer alert only when the wanted thing is not already available. Use when the operator asks whether a seat is open, whether upgrade space exists (Z class, upgrade certificate, SkyTeam partner), asks to be alerted when a seat or fare class opens up, or names a flight and asks about Comfort+ / premium economy / business availability.
+description: Check seat availability or fare-class (upgrade) inventory on a flight, review seats across every upcoming flight at once, or create an ExpertFlyer alert when the wanted thing is not already available. Actions - check fare-class/upgrade inventory (Z class, upgrade certificate, SkyTeam partner); check seats on one flight; review upcoming flights for better seats; create a seat or fare-class alert; diagnose access. Use when the operator asks whether a seat is open, asks about Comfort+ / premium economy / business availability, says make sure I have the best seats or check my upcoming flights for better seats, asks to be alerted when a seat or fare class opens up, or a new booking has just appeared.
 ---
 
 # ExpertFlyer
@@ -66,7 +66,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/upcoming-flights.py
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, summary, uid}], "count": N}`, soonest first, excluding departures inside the next 12 hours — by then check-in has assigned a seat and moving rarely helps.
+Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, summary, uid}], "count": N}`, soonest first. Departures inside the next 12 hours are excluded.
 
 Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origin` and `destination`, with the cabin the operator flies (`comfort+` unless they say otherwise). Apply Step 2's decision rules per flight and report only the flights that need something:
 
@@ -74,9 +74,9 @@ Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origi
 - `best` null and `cabin_present` true → offer the alert (Step 4)
 - `cabin_present` false → skip the flight silently; the cabin does not exist on that aircraft
 
-Say nothing about a flight where the cabin is absent or the operator already has the best available seat — a per-flight report with nothing to act on is noise.
+Say nothing about a flight where the cabin is absent or nothing better is open.
 
-If the service reports the flight is not found on that date, retry once with the previous day. The schedule stamps UTC, so a late-evening local departure lands on the next UTC day.
+If the service reports the flight is not found on that date, retry once with the previous day.
 
 Finish here unless the operator accepts an alert.
 

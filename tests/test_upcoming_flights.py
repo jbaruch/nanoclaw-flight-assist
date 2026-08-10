@@ -127,3 +127,41 @@ def test_end_to_end_against_the_real_schedule_shape(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["count"] == 2
     assert out["flights"][0]["summary"] == "DL2637 BNA to ATL"
+
+
+# --- input faults are reported, never raised ---------------------------------
+
+
+def test_a_bad_reference_instant_reports_rather_than_tracebacks(tmp_path, capsys):
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps([DL2957]))
+    code = uf.main(["--schedule", str(path), "--now", "not-a-date"])
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "bad_now"
+
+
+def test_a_json_scalar_root_reports_rather_than_tracebacks(tmp_path, capsys):
+    """Valid JSON, wrong shape — parses fine then explodes on iteration."""
+    path = tmp_path / "s.json"
+    path.write_text("42")
+    code = uf.main(["--schedule", str(path), "--now", NOW])
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "bad_schedule"
+
+
+def test_an_unparseable_timestamp_skips_one_event_not_the_schedule():
+    broken = event("DL5 ATL to JFK", "not-a-timestamp")
+    flights = uf.upcoming_flights([broken, DL2957], uf._parse_instant(NOW), 12)
+    assert [f["flight"] for f in flights] == ["2957"]
+
+
+def test_a_missing_start_skips_the_event():
+    no_start = {k: v for k, v in DL2957.items() if k != "start"}
+    assert uf.flight_from_event(no_start) is None
+
+
+def test_a_dict_root_with_an_events_key_is_accepted(tmp_path, capsys):
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps({"events": [DL2957]}))
+    assert uf.main(["--schedule", str(path), "--now", NOW]) == 0
+    assert json.loads(capsys.readouterr().out)["count"] == 1

@@ -26,6 +26,8 @@ The reference instant is injected with `--now` rather than read from the clock, 
 
 The new skill step reports only flights that need something: a seat worth taking, or an empty cabin worth watching. A flight where the cabin does not exist on the aircraft, or where nothing better is open, is passed over silently.
 
+Input faults are reported, never raised: a malformed `--now`, a schedule whose root is a valid JSON scalar rather than a list, and an unparseable event timestamp each produce structured JSON on stdout with an actionable stderr diagnostic. A single bad timestamp skips its own event rather than losing the whole schedule, exactly as an unparseable summary does.
+
 One known edge is documented rather than papered over: the schedule stamps UTC, so a late-evening local departure falls on the next UTC day. The step retries once with the previous day when the service reports the flight missing on the computed date.
 
 ## 0.2.98 — 2026-08-10
