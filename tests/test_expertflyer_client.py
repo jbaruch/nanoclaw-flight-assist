@@ -337,6 +337,7 @@ def test_rank_labels_the_reclining_exit_row_on_the_production_path():
                 "cabin": "Y",
             },
         ],
+        "exit_rows": [20, 21],
         "available_total": 2,
     }
     out = client._rank(payload)
@@ -344,3 +345,22 @@ def test_rank_labels_the_reclining_exit_row_on_the_production_path():
     assert out["ranked"][0]["why"] == "21A (window, exit row, reclines)"
     # The row in front is fixed-back precisely because 21 sits behind it.
     assert out["ranked"][1]["why"] == "20A (window, exit row)"
+
+
+def test_rank_does_not_promote_an_exit_row_when_the_layout_is_absent():
+    """No `exit_rows` from the service: the rear row may be occupied."""
+    payload = {
+        "cabin": "Y",
+        "seats": [
+            {
+                "label": "20A",
+                "row": 20,
+                "column": "A",
+                "position": "window",
+                "isExitRow": True,
+                "cabin": "Y",
+            },
+        ],
+        "available_total": 1,
+    }
+    assert client._rank(payload)["best"] == "20A (window, exit row)"

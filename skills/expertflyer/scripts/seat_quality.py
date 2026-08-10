@@ -84,18 +84,30 @@ def _position(seat: dict) -> str:
     )
 
 
-def exit_tiers(seats) -> dict[int, int]:
+def exit_tiers(seats, cabin_exit_rows=None) -> dict[int, int]:
     """Map each exit row to its recline tier, derived from the cabin's layout.
 
     The seat map carries `isExitRow` and `row` but no recline signal, so the
-    distinction is read off geometry instead: an exit row cannot recline when
-    another exit row sits directly behind it. That is exactly why the forward
-    row of a pair is fixed-back — and why the second is the one worth having.
+    distinction is read off geometry: an exit row cannot recline when another
+    exit row sits directly behind it. That is why the forward row of a pair is
+    fixed-back, and why the second is the one worth having.
 
-    A lone exit row has nothing behind it and therefore reclines.
+    `cabin_exit_rows` must be EVERY exit row in the cabin. `seats` alone is not
+    enough: the service reports bookable seats only, so an occupied rear exit
+    row is invisible and the open row in front of it would be promoted to
+    reclining — recommending the one seat the operator specifically does not
+    want. Without the full layout, no exit row is claimed to recline.
     """
-    rows = {int(s["row"]) for s in seats if s.get("isExitRow")}
-    return {r: (EXIT_NO_RECLINE if (r + 1) in rows else EXIT_RECLINE) for r in rows}
+    exits = [s for s in seats if s.get("isExitRow")]
+    present = {int(s["row"]) for s in exits}
+    if cabin_exit_rows is None:
+        # No layout: fall back to an explicit per-seat flag where one exists,
+        # and otherwise claim nothing. Never promote on absent evidence.
+        return {
+            int(s["row"]): (EXIT_RECLINE if s.get("reclines") else EXIT_NO_RECLINE) for s in exits
+        }
+    layout = {int(r) for r in cabin_exit_rows}
+    return {r: (EXIT_NO_RECLINE if (r + 1) in layout else EXIT_RECLINE) for r in present}
 
 
 def _exit_tier(seat: dict, cabin: str, tiers: dict[int, int] | None = None) -> int:
@@ -158,17 +170,20 @@ def seat_sort_key(
     return (cabin_key, exit_tier, -effective_row, position)
 
 
-def rank_seats(seats, cabin: str | None = None) -> list[dict]:
-    """Acceptable seats, best first. Middles are dropped, never ranked last."""
+def rank_seats(seats, cabin: str | None = None, cabin_exit_rows=None) -> list[dict]:
+    """Acceptable seats, best first. Middles are dropped, never ranked last.
+
+    `cabin_exit_rows` is the cabin's full exit-row set; see `exit_tiers`.
+    """
     usable = [s for s in seats if is_acceptable(s)]
     # Adjacency is a property of the cabin, not of one seat, so the tiers are
     # computed over every seat given — including the ones ranking will drop.
-    tiers = exit_tiers(seats)
+    tiers = exit_tiers(seats, cabin_exit_rows)
     return sorted(usable, key=lambda s: seat_sort_key(s, cabin, tiers), reverse=True)
 
 
-def best_seat(seats, cabin: str | None = None) -> dict | None:
-    ranked = rank_seats(seats, cabin)
+def best_seat(seats, cabin: str | None = None, cabin_exit_rows=None) -> dict | None:
+    ranked = rank_seats(seats, cabin, cabin_exit_rows)
     return ranked[0] if ranked else None
 
 

@@ -24,7 +24,9 @@ It is now read off geometry. An exit row cannot recline when another exit row si
 
 The ranked output carries the derived tier through to its description too: the client computes the tiers once and passes them to both ranking and rendering, so a derived reclining row reads as `21A (window, exit row, reclines)` rather than a bare `exit row`.
 
-Adjacency is a property of the cabin rather than of one seat, so tiers are computed across every seat in the response — including the middles ranking then drops, since a middle in the row behind still fixes the row in front. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
+Adjacency needs the cabin's FULL exit-row layout, not the seats on offer. The service reports bookable seats only, so an occupied rear exit row is invisible — deriving the tier from that list alone would call the open row in front of it reclining, recommending precisely the fixed-back seat the operator does not want. Ranking therefore takes the layout separately and, without it, claims no exit row reclines: an explicit per-seat flag is still honoured where one exists, but absent evidence never promotes.
+
+Within a supplied layout, a middle in the row behind still fixes the row in front, so tiers are computed across every row rather than only the bookable ones. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
 
 ## 0.2.98 — 2026-08-10
 
