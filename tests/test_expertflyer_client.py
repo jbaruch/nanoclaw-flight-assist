@@ -509,6 +509,13 @@ def test_a_certificate_failure_is_reported_as_tls_not_unreachable(monkeypatch):
     assert result["error"] == "tls"
     assert "SSL_CERT_FILE" in result["detail"]
     assert "check the service is running" not in result["detail"]
+    # The recovery must not prescribe a package this plugin does not depend on:
+    # the client is stdlib-only, so `python3 -m certifi` can fail with
+    # ModuleNotFoundError on the very host that needs the fix.
+    # Match the package invocation, not the bare word: "certificate" contains
+    # "certifi" and would false-positive.
+    assert "-m certifi" not in result["detail"]
+    assert "/etc/ssl/cert.pem" in result["detail"]
 
 
 def test_a_refused_connection_is_still_unreachable(monkeypatch):

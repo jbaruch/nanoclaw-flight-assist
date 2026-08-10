@@ -4,7 +4,9 @@
 
 A certificate that could not be verified surfaced as `unreachable` with "check the service is running and EXPERTFLYER_API_URL points at it". The service had answered; only its chain failed validation, so that message sends the operator to the wrong layer.
 
-It is now a distinct `tls` error naming the fix: on a host whose Python does not read the system trust store, set `SSL_CERT_FILE` to a CA bundle. Following the message makes the same call succeed.
+It is now a distinct `tls` error naming the fix: on a host whose Python does not read the system trust store, point `SSL_CERT_FILE` at the system CA bundle — `/etc/ssl/cert.pem` on macOS, `/etc/ssl/certs/ca-certificates.crt` on Debian. Following the message makes the same call succeed, verified against the deployed service.
+
+The recovery names the system store rather than `certifi`: this client is stdlib-only, so prescribing a package the plugin does not declare could fail with `ModuleNotFoundError` on the very host that needs the fix.
 
 Ordinary connection failures keep the `unreachable` wording, which is still where they should be looked at. In the container this path does not arise — the service is reached over plain HTTP on the docker bridge — but the diagnostic is what a person reads when verifying by hand from a machine on the tailnet.
 

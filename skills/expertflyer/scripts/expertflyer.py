@@ -86,8 +86,9 @@ def _request(method: str, path: str, params: dict | None = None, body: dict | No
                     f"({exc.reason.verify_message or exc.reason.reason}) — the service "
                     "responded but its certificate chain could not be verified. On a "
                     "host whose Python does not read the system trust store (macOS), "
-                    "set SSL_CERT_FILE to a CA bundle, e.g. "
-                    "SSL_CERT_FILE=$(python3 -m certifi)"
+                    "point SSL_CERT_FILE at the system CA bundle: "
+                    "SSL_CERT_FILE=/etc/ssl/cert.pem on macOS, "
+                    "/etc/ssl/certs/ca-certificates.crt on Debian"
                 ),
             }
         return {
