@@ -1242,7 +1242,9 @@ def test_the_alert_covers_one_rung_up_however_wide_the_sweep(cabins):
     A wide sweep sees what exists; it does not widen what is worth watching."""
     for code in ("Y", "W", "A", "C", "F"):
         cabins[code] = _cabin(code, [])
-    cabins["Y"] = _cabin("Y", [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}])
+    # A middle only: nothing worth taking anywhere, so every watchable cabin
+    # stays watchable and the rung bound is the only thing narrowing the list.
+    cabins["Y"] = _cabin("Y", [{"label": "30B", "row": 30, "column": "B", "position": "middle"}])
     out = client.run(
         client.parse_args(
             [
@@ -1274,3 +1276,70 @@ def test_the_alert_never_names_a_cabin_the_aircraft_lacks(cabins):
     out = _assess(held="21F", held_position="window")
     assert out["cabins_absent"] == ["A"]
     assert out["alert_cabins"] == ["W"]
+
+
+def test_a_cabin_already_holding_a_seat_is_not_worth_watching(cabins):
+    """Check first, alert only if absent. A watch on a cabin with a seat
+    already open fires the moment it is created."""
+    # Main has open seats, none better than the held exit row. Comfort+ empty.
+    cabins["Y"] = _cabin(
+        "Y",
+        [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}],
+        exit_rows=[21],
+    )
+    cabins["W"] = _cabin("W", [])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    # Y already has a non-middle open, so a Y watch would fire immediately.
+    assert out["acceptable_by_cabin"]["Y"] == 1
+    assert out["alert_cabins"] == ["W"]
+    assert out["alert_recommended"] is True
+
+
+def test_nothing_is_recommended_when_every_watchable_cabin_has_a_seat(cabins):
+    cabins["Y"] = _cabin(
+        "Y", [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}], exit_rows=[21]
+    )
+    cabins["W"] = _cabin("W", [{"label": "12B", "row": 12, "column": "B", "position": "middle"}])
+    cabins["W"]["seats"].append(
+        {"label": "14D", "row": 14, "column": "D", "position": "aisle", "cabin": "W"}
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["alert_cabins"] == []
+    assert out["alert_recommended"] is False

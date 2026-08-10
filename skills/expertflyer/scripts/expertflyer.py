@@ -545,7 +545,15 @@ def _assess(args) -> dict:
     # An alert is worth setting on the cabins the operator would actually move
     # into. A wide sweep is for seeing what exists; it does not widen what is
     # worth watching.
-    watchable = set(seat_quality.cabins_at_or_above(held_cabin, ALERT_RUNGS))
+    #
+    # Check first, alert only if absent: a cabin already holding a seat worth
+    # taking has nothing to wait for, and a watch on it fires the moment it is
+    # created. Only a cabin with nothing acceptable open is worth watching.
+    watchable = [
+        cabin
+        for cabin in seat_quality.cabins_at_or_above(held_cabin, ALERT_RUNGS)
+        if cabin in scanned and common["acceptable_by_cabin"].get(cabin, 0) == 0
+    ]
 
     return {
         **common,
@@ -558,11 +566,10 @@ def _assess(args) -> dict:
         "best_upgrade": described[0]["why"] if described else None,
         "cabin_openings": openings,
         # Nothing selectable beats the held seat, so watching is the only move
-        # left. A seat worth taking is taken now, not watched.
-        "alert_recommended": not described,
-        "alert_cabins": sorted(
-            watchable & set(scanned), key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True
-        ),
+        # left. A seat worth taking is taken now, not watched — and there has
+        # to be a cabin worth watching.
+        "alert_recommended": not described and bool(watchable),
+        "alert_cabins": sorted(watchable, key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True),
     }
 
 

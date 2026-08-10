@@ -87,13 +87,13 @@ Responses carrying `error` and `detail` instead of a `verdict`:
 
 Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
 
-`optimal` and `upgrade` add `upgrades`, `best_upgrade`, `cabin_openings`, `alert_recommended` and `alert_cabins`. Every other verdict adds `detail` and carries none of those three. Their absence is the contract, not a malformed response.
+`optimal` and `upgrade` add `upgrades`, `best_upgrade`, `cabin_openings`, `alert_recommended` and `alert_cabins`. Every other verdict adds `detail` and carries none of those five. Their absence is the contract, not a malformed response.
 
 `upgrades` holds seats in the held cabin. The operator selects those in the airline's app.
 
 `cabin_openings` holds seats in a better cabin. Those are not a seat change — taking one is a fare change or an upgrade clearance. Never tell the operator to go select one. Step 1 answers whether the upgrade inventory exists.
 
-`alert_cabins` is what an alert should watch: the held cabin and one rung up, whatever the sweep read. Offer the alert on those, never on every cabin in `cabins_scanned`.
+`alert_cabins` is what an alert should watch: the held cabin and one rung up, whatever the sweep read, minus any cabin already holding a seat worth taking. Offer the alert on those, never on every cabin in `cabins_scanned`. An empty list with `alert_recommended: false` means there is nothing to watch for.
 
 `cabins_scanned` is the whole evidence base, `seats_compared` is its size, and `acceptable_by_cabin` breaks it down per cabin into seats worth taking. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up` to see further, which does not widen `alert_cabins`.
 
