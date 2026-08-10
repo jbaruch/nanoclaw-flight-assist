@@ -115,9 +115,14 @@ def upcoming_flights(events, now: datetime, min_lead_hours: int) -> list[dict]:
             continue
         # The same segment can appear twice across a re-synced schedule; the
         # uid is stable, so last write wins rather than double-reporting.
-        found[str(flight["uid"] or f"{flight['airline']}{flight['flight']}{flight['date']}")] = (
-            flight
+        # Without one, the key must carry route and departure too: a through
+        # flight keeps its number across legs on the same date, so keying on
+        # carrier+number+date alone would silently drop one of them.
+        fallback = (
+            f"{flight['airline']}{flight['flight']}"
+            f"{flight['origin']}{flight['destination']}{flight['departs_utc']}"
         )
+        found[str(flight["uid"] or fallback)] = flight
     return sorted(found.values(), key=lambda f: f["departs_utc"])
 
 
@@ -137,6 +142,15 @@ def main(argv=None) -> int:
     except json.JSONDecodeError as exc:
         print(json.dumps({"error": "bad_schedule", "detail": str(exc)}))
         print(f"upcoming-flights: {path} is not valid JSON — {exc}", file=sys.stderr)
+        return 1
+    except UnicodeDecodeError as exc:
+        print(json.dumps({"error": "unreadable_schedule", "detail": str(exc)}))
+        print(f"upcoming-flights: {path} is not UTF-8 text — {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # PermissionError, ENOENT on a racing delete, a mount that vanished.
+        print(json.dumps({"error": "unreadable_schedule", "detail": str(exc)}))
+        print(f"upcoming-flights: cannot read {path} — {exc}", file=sys.stderr)
         return 1
 
     if isinstance(events, dict):

@@ -2,7 +2,12 @@
 
 Fixtures use the real schedule shape, captured from the deployed nightly sync:
 `type: "Flight"`, a `summary` like "DL2957 ATL to YYZ", a UTC `start`, and a
-TripIt `uid`. The reference instant is injected, never read from the clock.
+TripIt `uid`.
+
+The timeline is fixed and entirely in the PAST, with the real intervals
+preserved: the reference instant, a departure two days out, one six hours out,
+and one already gone. Nothing here touches a live upstream, so no future date
+is needed and one would only rot.
 """
 
 import importlib.util
@@ -13,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Fixed reference: every expectation below is relative to this, so the suite
 # does not rot as the real date advances.
-NOW = "2026-08-09T00:00:00Z"
+NOW = "2024-03-05T00:00:00Z"
 
 
 def _load(name: str, relpath: str):
@@ -39,8 +44,8 @@ def event(summary, start, type_="Flight", uid=None):
     }
 
 
-DL2957 = event("DL2957 ATL to YYZ", "2026-08-11T12:05:00Z")
-DL2637 = event("DL2637 BNA to ATL", "2026-08-11T10:14:00Z")
+DL2957 = event("DL2957 ATL to YYZ", "2024-03-07T12:05:00Z")
+DL2637 = event("DL2637 BNA to ATL", "2024-03-07T10:14:00Z")
 
 
 def test_parses_the_real_summary_shape():
@@ -49,23 +54,23 @@ def test_parses_the_real_summary_shape():
     assert flight["flight"] == "2957"
     assert flight["origin"] == "ATL"
     assert flight["destination"] == "YYZ"
-    assert flight["date"] == "2026-08-11"
+    assert flight["date"] == "2024-03-07"
 
 
 def test_accepts_a_space_between_carrier_and_number():
     assert (
-        uf.flight_from_event(event("KL 642 JFK to AMS", "2026-08-31T21:40:00Z"))["flight"] == "642"
+        uf.flight_from_event(event("KL 642 JFK to AMS", "2024-03-27T21:40:00Z"))["flight"] == "642"
     )
 
 
 def test_ignores_non_flight_events():
-    lodging = event("Hilton Amsterdam", "2026-08-31T21:40:00Z", type_="Lodging")
+    lodging = event("Hilton Amsterdam", "2024-03-27T21:40:00Z", type_="Lodging")
     assert uf.flight_from_event(lodging) is None
 
 
 def test_ignores_a_flight_whose_summary_does_not_parse():
     """Better to skip than to invent a flight number from prose."""
-    odd = event("Rebooked - see email", "2026-08-31T21:40:00Z")
+    odd = event("Rebooked - see email", "2024-03-27T21:40:00Z")
     assert uf.flight_from_event(odd) is None
 
 
@@ -76,18 +81,18 @@ def test_orders_soonest_first():
 
 def test_drops_departures_inside_the_lead_window():
     """Too close to act on — check-in has already assigned a seat."""
-    soon = event("DL1 ATL to JFK", "2026-08-09T06:00:00Z")
+    soon = event("DL1 ATL to JFK", "2024-03-05T06:00:00Z")
     flights = uf.upcoming_flights([soon, DL2957], uf._parse_instant(NOW), 12)
     assert [f["flight"] for f in flights] == ["2957"]
 
 
 def test_drops_flights_already_departed():
-    past = event("DL9 ATL to JFK", "2026-08-01T06:00:00Z")
+    past = event("DL9 ATL to JFK", "2024-02-26T06:00:00Z")
     assert uf.upcoming_flights([past], uf._parse_instant(NOW), 12) == []
 
 
 def test_the_lead_window_is_configurable():
-    soon = event("DL1 ATL to JFK", "2026-08-09T06:00:00Z")
+    soon = event("DL1 ATL to JFK", "2024-03-05T06:00:00Z")
     assert uf.upcoming_flights([soon], uf._parse_instant(NOW), 0)[0]["flight"] == "1"
 
 
@@ -165,3 +170,34 @@ def test_a_dict_root_with_an_events_key_is_accepted(tmp_path, capsys):
     path.write_text(json.dumps({"events": [DL2957]}))
     assert uf.main(["--schedule", str(path), "--now", NOW]) == 0
     assert json.loads(capsys.readouterr().out)["count"] == 1
+
+
+def test_same_flight_number_on_two_legs_is_not_collapsed():
+    """A through flight keeps its number across legs on the same date."""
+    leg1 = {**event("DL100 ATL to LAX", "2024-03-07T12:00:00Z"), "uid": None}
+    leg2 = {**event("DL100 LAX to HNL", "2024-03-07T18:00:00Z"), "uid": None}
+    flights = uf.upcoming_flights([leg1, leg2], uf._parse_instant(NOW), 12)
+    assert [f["destination"] for f in flights] == ["LAX", "HNL"]
+
+
+def test_an_unreadable_schedule_reports_rather_than_tracebacks(tmp_path, capsys):
+    """Not valid UTF-8 — a real failure mode for a synced file."""
+    path = tmp_path / "s.json"
+    path.write_bytes(b"\xff\xfe not utf-8")
+    code = uf.main(["--schedule", str(path), "--now", NOW])
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "unreadable_schedule"
+
+
+def test_a_permission_failure_reports_rather_than_tracebacks(tmp_path, capsys):
+    import os
+
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps([DL2957]))
+    os.chmod(path, 0o000)
+    try:
+        code = uf.main(["--schedule", str(path), "--now", NOW])
+    finally:
+        os.chmod(path, 0o644)
+    assert code == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "unreadable_schedule"

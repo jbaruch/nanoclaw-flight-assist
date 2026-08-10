@@ -74,7 +74,7 @@ Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origi
 - `best` null and `cabin_present` true → offer the alert (Step 4)
 - `cabin_present` false → skip the flight silently; the cabin does not exist on that aircraft
 
-Say nothing about a flight where the cabin is absent or nothing better is open.
+Say nothing about a flight whose cabin is absent from the aircraft. Every other flight gets one of the two lines above.
 
 If the service reports the flight is not found on that date, retry once with the previous day.
 
