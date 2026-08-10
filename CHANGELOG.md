@@ -1,5 +1,21 @@
 # Changelog
 
+### Fixed — First, Delta One and Premium Select ranked below Comfort+
+
+`_cabin_rank` scored `W` at 1 and every other cabin at 0, so First (`F`), Delta One (`C`) and Premium Select (`A`) tied with the Main Cabin. Cabin is the first key in the sort tuple, so a Comfort+ window in row 30 outranked the First seat already held in row 1 — and `is_upgrade` would have reported it as an upgrade worth moving to. Found while wiring the held-seat comparison; the live case is 1A on DL2714 with Comfort+ open further back.
+
+Cabins now rank on the full ladder from `references/web-contract.md`: `F` > `C` > `A` > `W` > `Y`. `cabin_code()` resolves the operator's words ("Delta One", "premium select", "coach") to the service's codes, so a held cabin stated in prose compares against the right rung. Premium economy stays `A` and never collapses into `W` — they are different cabins one rung apart.
+
+`seat_cabin()` is now the single place a seat's cabin is resolved and validated, so a cabin fault carries the seat label the way a position fault already did — `cabin_code()` knows the cabin but not whose it is, and Step 5 relays `detail` on the promise that it names the seat.
+
+An unrecognised cabin raises rather than scoring as Main Cabin. Silently ranking an unknown premium cabin at the bottom is how a downgrade gets reported as an upgrade, which is the defect this entry describes.
+
+`expertflyer.py` reports a refused ranking as `{"error": "unrankable"}` with the offending seat named, rather than letting `SeatQualityError` reach the operator as a traceback — the ranker now raises on the production path where it previously could not. `ranked`, `best` and `acceptable_total` are dropped from that response so a partial ranking cannot read as a complete one.
+
+The skill carries the new error's flow rather than leaving it to the agent. Step 5 names `unrankable` as the one value that is not an access fault — the service answered, so the access diagnostic it otherwise runs would investigate a layer that is working. Step 2 gains a first rule for a response carrying `error`: `best` is absent rather than `null`, and the two mean opposite things. `null` is "nothing here is worth taking, watch it"; absent is "nothing was ranked", so offering an alert would claim a seat is missing when its quality was never established.
+
+A seat whose `position` is present but unrecognised now says so, naming the value. It previously reported "no window/aisle/middle flag", which sends the operator to look for a missing field when the field is there with a word the ranker does not know.
+
 ## 0.2.103 — 2026-08-10
 
 ### Fixed — a TLS verification failure no longer reports as an unreachable service (#229)

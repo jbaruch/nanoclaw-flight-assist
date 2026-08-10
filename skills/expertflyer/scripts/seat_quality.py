@@ -18,8 +18,11 @@ The operator's rules, verbatim in effect:
      overwhelmingly a Main Cabin feature, but the preference is harmless
      where there are none and correct where there are.
 
-Cabin outranks the exit row, per the operator: Comfort+ buys front-of-the-bus
-AND leg room, whereas an exit row buys leg room alone.
+Cabin outranks the exit row, per the operator: a better cabin buys
+front-of-the-bus AND leg room, whereas an exit row buys leg room alone. Cabins
+rank on the full ladder (`CABIN_SCORE`), not Comfort+-versus-everything: a
+two-value split puts First and Delta One BELOW Comfort+, so a Comfort+ window
+in row 30 reads as an upgrade from seat 1A.
 
 Window-versus-row is graded rather than absolute: an aisle up front beats a
 window far back, but a window a few rows further back still wins. WINDOW_WORTH_ROWS
@@ -42,8 +45,35 @@ EXCLUDED_POSITIONS = frozenset({"middle"})
 # Higher is better.
 POSITION_SCORE = {"window": 2, "aisle": 1}
 
+FIRST = "F"
+BUSINESS = "C"
+PREMIUM_ECONOMY = "A"
 COMFORT_PLUS = "W"
 MAIN_CABIN = "Y"
+
+# The cabin ladder, higher is better. Codes are the service's, per
+# `skills/expertflyer/references/web-contract.md`. Ranking Comfort+ against
+# everything else instead would score First, Delta One and Premium Select at
+# the Main Cabin's 0 — so a Comfort+ seat would outrank the First seat already
+# held, which is the one comparison a seat check must never get backwards.
+CABIN_SCORE = {MAIN_CABIN: 0, COMFORT_PLUS: 1, PREMIUM_ECONOMY: 2, BUSINESS: 3, FIRST: 4}
+
+# The words the operator uses for each cabin, from the same table. Premium
+# economy is Premium Select (`A`) and is NOT Comfort+ (`W`); resolving it to
+# `W` would compare a seat against the wrong cabin's ladder position.
+CABIN_ALIASES = {
+    "first": FIRST,
+    "business": BUSINESS,
+    "delta one": BUSINESS,
+    "premium economy": PREMIUM_ECONOMY,
+    "premium select": PREMIUM_ECONOMY,
+    "comfort+": COMFORT_PLUS,
+    "comfort plus": COMFORT_PLUS,
+    "economy comfort": COMFORT_PLUS,
+    "economy": MAIN_CABIN,
+    "main cabin": MAIN_CABIN,
+    "coach": MAIN_CABIN,
+}
 
 # Exit tiers, rule 3. The recline distinction separates paired exit rows: the
 # forward one is fixed-back precisely BECAUSE the second sits behind it.
@@ -78,6 +108,15 @@ def _position(seat: dict) -> str:
         return "aisle"
     if seat.get("isMiddle"):
         return "middle"
+    if named is not None:
+        # A present-but-unknown value and an absent one send the operator to
+        # different places — one is a service that renamed a position, the
+        # other is a seat map that classified nothing.
+        raise SeatQualityError(
+            f"seat {seat.get('label')!r} reports position {named!r}, which is not "
+            f"window, aisle or middle — the service's vocabulary changed, so "
+            f"ranking it would guess at what the operator would sit in"
+        )
     raise SeatQualityError(
         f"seat {seat.get('label')!r} reports no window/aisle/middle flag — "
         "the seat map did not classify it, so it cannot be ranked"
@@ -129,8 +168,29 @@ def _exit_tier(seat: dict, cabin: str, tiers: dict[int, int] | None = None) -> i
     return EXIT_RECLINE if seat.get("reclines") else EXIT_NO_RECLINE
 
 
+def cabin_code(cabin: str) -> str:
+    """The service's cabin code, from a code or the words the operator uses.
+
+    Both shapes reach ranking: the service stamps a code on each seat, while a
+    held cabin arrives as whatever the operator said. An unrecognised cabin
+    raises — scoring it as Main Cabin would silently rank a premium seat at the
+    bottom of the ladder and report the downgrade as an upgrade.
+    """
+    text = str(cabin).strip()
+    if text.upper() in CABIN_SCORE:
+        return text.upper()
+    code = CABIN_ALIASES.get(text.lower())
+    if code is None:
+        raise SeatQualityError(
+            f"cabin {cabin!r} is not a cabin this ranks — pass one of "
+            f"{', '.join(sorted(CABIN_SCORE))} or a name from "
+            f"{', '.join(sorted(CABIN_ALIASES))}"
+        )
+    return code
+
+
 def _cabin_rank(cabin: str) -> int:
-    return 1 if cabin == COMFORT_PLUS else 0
+    return CABIN_SCORE[cabin_code(cabin)]
 
 
 def seat_cabin(seat: dict, fallback: str | None = None) -> str:
@@ -147,7 +207,13 @@ def seat_cabin(seat: dict, fallback: str | None = None) -> str:
             f"seat {seat.get('label')!r} carries no cabin and none was supplied — "
             "cabin decides rank, so guessing it would silently mis-order"
         )
-    return str(cabin)
+    try:
+        return cabin_code(cabin)
+    except SeatQualityError as exc:
+        # `cabin_code` knows the cabin but not whose it is. The seat label is
+        # what the operator needs to act on, and this is the outermost place
+        # that still has it, so the label is attached here.
+        raise SeatQualityError(f"seat {seat.get('label')!r}: {exc}") from exc
 
 
 def seat_sort_key(

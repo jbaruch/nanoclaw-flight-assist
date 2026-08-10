@@ -533,3 +533,48 @@ def test_a_tls_failure_still_exits_non_zero(monkeypatch, capsys):
     _url_error(reason, monkeypatch)
     assert client.main(["alerts"]) == 1
     assert json.loads(capsys.readouterr().out)["error"] == "tls"
+
+
+# --- a seat the ranker refuses is reported, not raised ------------------------
+
+
+def test_an_unrankable_seat_is_reported_as_an_error_not_a_traceback():
+    """The service answered; one seat could not be ordered. The operator has to
+    read WHICH seat, so it is a structured error rather than a stack trace."""
+    payload = {
+        "cabin": "W",
+        "seats": [{"label": "12A", "row": 12, "column": "A", "position": "porthole", "cabin": "W"}],
+        "available_total": 1,
+    }
+    out = client._rank(payload)
+    assert out["error"] == "unrankable"
+    assert "12A" in out["detail"]
+    # A partial ranking would read as a complete one.
+    assert "ranked" not in out
+    assert "best" not in out
+
+
+def test_an_unknown_cabin_is_reported_rather_than_ranked_as_main():
+    payload = {
+        "cabin": "P",
+        "seats": [{"label": "2A", "row": 2, "column": "A", "position": "window", "cabin": "P"}],
+        "available_total": 1,
+    }
+    out = client._rank(payload)
+    assert out["error"] == "unrankable"
+    assert "'P'" in out["detail"]
+    # Step 5 relays `detail` and promises it names the seat.
+    assert "2A" in out["detail"]
+
+
+def test_an_unrankable_response_exits_non_zero(capture, capsys):
+    capture["_payload"] = {
+        "cabin": "W",
+        "seats": [{"label": "12A", "row": 12, "column": "A", "position": "porthole", "cabin": "W"}],
+        "available_total": 1,
+    }
+    code = client.main(
+        ["seats", "--airline", "DL", "--flight", "2957", "--date", "2024-03-05", "--cabin", "W"]
+    )
+    assert code == 1
+    assert "porthole" in capsys.readouterr().err

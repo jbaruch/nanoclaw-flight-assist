@@ -49,9 +49,10 @@ Outputs `cabin_present`, `seats_in_cabin`, `available_total`, `recommend_alert`,
 
 Decide on `best` and `acceptable_total`, never on `matching`. Ranking drops seats the operator will not take, so `matching` can list a seat that `ranked` excludes — a middle is reported by the service and refused by the ranking. Treat `matching` as informational only.
 
-1. `cabin_present` is false — the aircraft has no such cabin. Say so. Offer no alert; a cabin that does not exist can never open.
-2. `best` is set — name it and say it is open. Offer no alert.
-3. `best` is `null` — nothing in the cabin is worth taking, whatever `available_total` says. Offer the alert (Step 4).
+1. `error` is present — `best`, `ranked` and `acceptable_total` are absent from that response. Go to Step 5. An absent `best` is not `best: null`; treating it as rule 3 would offer an alert on an answer that was never ranked.
+2. `cabin_present` is false — the aircraft has no such cabin. Say so. Offer no alert; a cabin that does not exist can never open.
+3. `best` is set — name it and say it is open. Offer no alert.
+4. `best` is `null` — nothing in the cabin is worth taking, whatever `available_total` says. Offer the alert (Step 4).
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
@@ -106,7 +107,11 @@ Finish here.
 
 ## Step 5 — Diagnose access
 
-Run when any step above reports an `error` field.
+Run when a step above reports an `error` field.
+
+`unrankable` is the one value that is **not** an access fault: the service answered, and the ranking refused a seat it could not order — a position word it does not know, or a cabin outside the ladder. Relay `detail`, which names the seat, and finish. Do not run the command below; there is no access problem to diagnose. Do not offer an alert — nothing was ranked, so nothing is known to be absent.
+
+For every other value:
 
 ```bash
 python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py alerts
