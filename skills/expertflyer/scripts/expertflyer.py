@@ -423,6 +423,18 @@ def _assess(args) -> dict:
     # appears in two cabins. Absence here is not disproof of membership, and
     # disproving it needs the cabin's row layout the service does not yet
     # report (jbaruch/expertflyer-api#20).
+    # Rendered before the early returns: a response that carries `held` with a
+    # known position carries its description too. Only an unknown position has
+    # nothing to render, and that shape says so.
+    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
+    if held["position"] is not None:
+        try:
+            held["why"] = seat_quality.describe(
+                held, None, seat_quality.exit_tiers([held], layout or None)
+            )
+        except seat_quality.SeatQualityError as exc:
+            return {**common, "error": "unrankable", "detail": str(exc), "held": held}
+
     held_rows = scanned[held_cabin].get("rows")
     if held_rows is not None:
         # The cabin's full extent, sold out or not. Membership is decidable
@@ -461,18 +473,6 @@ def _assess(args) -> dict:
                 for code, response in scanned.items()
                 if code != held_cabin and _has_row(response, row)
             )
-
-    # Rendered before the early returns: a response that carries `held` with a
-    # known position carries its description too. Only an unknown position has
-    # nothing to render, and that shape says so.
-    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
-    if held["position"] is not None:
-        try:
-            held["why"] = seat_quality.describe(
-                held, None, seat_quality.exit_tiers([held], layout or None)
-            )
-        except seat_quality.SeatQualityError as exc:
-            return {**common, "error": "unrankable", "detail": str(exc), "held": held}
 
     # A sweep that saw nothing has nothing to compare. `optimal` off an empty
     # evidence base is true the way "no counterexample was found" is true after

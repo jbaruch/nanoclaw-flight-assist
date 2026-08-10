@@ -1110,6 +1110,8 @@ def test_a_row_outside_the_held_cabin_s_extent_is_a_mismatch(cabins):
     assert out["held_cabin_source"] == "rows"
     assert "rows 10-20" in out["detail"]
     assert "upgrades" not in out
+    # Step 3 promises `held.why` on every shape but `held_position_unknown`.
+    assert out["held"]["why"] == "21F (window)"
 
 
 def test_the_mismatch_names_the_cabin_the_row_belongs_to(cabins):
