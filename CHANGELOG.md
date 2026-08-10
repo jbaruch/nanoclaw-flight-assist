@@ -26,7 +26,9 @@ The ranked output carries the derived tier through to its description too: the c
 
 Adjacency needs the cabin's FULL exit-row layout, not the seats on offer. The service reports bookable seats only, so an occupied rear exit row is invisible — deriving the tier from that list alone would call the open row in front of it reclining, recommending precisely the fixed-back seat the operator does not want. Ranking therefore takes the layout separately and, without it, claims no exit row reclines: an explicit per-seat flag is still honoured where one exists, but absent evidence never promotes.
 
-Within a supplied layout, a middle in the row behind still fixes the row in front, so tiers are computed across every row rather than only the bookable ones. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
+Within a supplied layout, a middle in the row behind still fixes the row in front, so tiers are computed across every row rather than only the bookable ones.
+
+The layout reaches `is_upgrade()` as well as bulk ranking. Without it the watch case compared a rear reclining exit row as though it were fixed-back, so the seat that opened could lose to the forward row it should beat — the one comparison that function exists to make. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
 
 ## 0.2.98 — 2026-08-10
 

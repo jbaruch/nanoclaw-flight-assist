@@ -215,16 +215,27 @@ def describe(seat: dict, cabin: str | None = None, tiers: dict[int, int] | None 
     return f"{seat_label(seat)} ({', '.join(bits)})"
 
 
-def is_upgrade(candidate: dict, current: dict | None, cabin: str | None = None) -> bool:
+def is_upgrade(
+    candidate: dict,
+    current: dict | None,
+    cabin: str | None = None,
+    cabin_exit_rows=None,
+) -> bool:
     """True when `candidate` is strictly better than the seat already held.
 
     Used for the watch case: only worth interrupting the operator when the
     seat that opened actually beats what they have.
+
+    `cabin_exit_rows` carries the same layout ranking uses. Without it a rear
+    reclining exit row looks fixed-back and can lose to the forward row it
+    should beat — the comparison this function exists to make.
     """
     if not is_acceptable(candidate):
         return False
     if current is None:
         return True
+    pair = [candidate, current]
+    tiers = exit_tiers(pair, cabin_exit_rows)
     # Each seat resolves its OWN cabin: the candidate may be Comfort+ while the
     # held seat is Main, which is exactly the comparison worth making.
-    return seat_sort_key(candidate, cabin) > seat_sort_key(current, cabin)
+    return seat_sort_key(candidate, cabin, tiers) > seat_sort_key(current, cabin, tiers)

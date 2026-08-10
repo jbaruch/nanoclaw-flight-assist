@@ -365,3 +365,18 @@ def test_without_a_layout_no_exit_row_is_claimed_to_recline():
         20: sq.EXIT_NO_RECLINE,
         21: sq.EXIT_NO_RECLINE,
     }
+
+
+def test_upgrade_sees_the_reclining_exit_row_when_given_the_layout():
+    """The watch case: 21A opens and must beat the fixed-back 20A held today."""
+    held = exit_seat(20, cabin=Y)
+    opened = exit_seat(21, cabin=Y)
+    assert sq.is_upgrade(opened, held, Y, [20, 21]) is True
+    assert sq.is_upgrade(held, opened, Y, [20, 21]) is False
+
+
+def test_upgrade_without_a_layout_does_not_invent_a_recline():
+    """Neither is claimed to recline, so the forward row wins on position."""
+    held = exit_seat(20, cabin=Y)
+    opened = exit_seat(21, cabin=Y)
+    assert sq.is_upgrade(opened, held, Y) is False
