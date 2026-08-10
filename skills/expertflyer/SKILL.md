@@ -87,7 +87,7 @@ Responses carrying `error` and `detail` instead of a `verdict`:
 2. `unrankable` — a seat the ranking refused. Step 6 covers it.
 3. any service fault, with `cabin_failed` and `cabins_requested` naming the cabin that did not load. Go to Step 6.
 
-`verdict: "no_held_seat"` carries `verdict` and `detail` alone; `held_cabin_unresolved` adds `cabins_absent`. Neither carries `held`.
+`verdict: "no_held_seat"` carries `verdict` and `detail` alone; `held_cabin_unresolved` adds `cabins_absent` and `row_in_cabins`. Neither carries `held`.
 
 Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared`, `held_cabin_from` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
 
@@ -130,10 +130,12 @@ Never say the held seat beat a cabin. `optimal` compares it against the seats th
 - Get the seat from byAir, or from the operator.
 - Report nothing about seat quality.
 
-**`held_cabin_unresolved`** — no cabin on the aircraft holds that row.
+**`held_cabin_unresolved`** — the layout does not say which cabin holds that row.
 
-- Relay `detail`.
-- Check the seat and the flight with the operator.
+- Relay `detail`. It names the cabins the row runs through, or says none does.
+- Ask the operator for the cabin when `row_in_cabins` names more than one.
+- Check the seat and the flight with the operator when `row_in_cabins` is empty.
+- Re-run with `--held-cabin`.
 - Report nothing about seat quality.
 
 **`held_position_unknown`** — the seat map does not say what the column is.

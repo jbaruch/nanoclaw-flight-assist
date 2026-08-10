@@ -395,6 +395,7 @@ def _assess(args) -> dict:
         # from the bottom of the ladder up — where most seats are, so the
         # common case costs one request.
         cabin_source = "resolved"
+        holders: list[str] = []
         for candidate in reversed(seat_quality.cabins_at_or_above(seat_quality.MAIN_CABIN, 4)):
             response = fetch(candidate)
             if "error" in response:
@@ -416,18 +417,39 @@ def _assess(args) -> dict:
                     ),
                 }
             if row in {int(r) for r in rows}:
-                held_cabin = candidate
+                holders.append(candidate)
+                # A cabin boundary can fall mid-row — the 739's Comfort+ ends a
+                # row later on the right — so one row number belongs to two
+                # ADJACENT cabins. Reading on past the first match is what
+                # tells them apart; anything further up cannot share this row.
+                above = seat_quality.cabins_above(candidate)
+                if not above:
+                    break
+                neighbour = fetch(above[-1])
+                if "error" not in neighbour and row in {
+                    int(r) for r in (neighbour.get("rows") or [])
+                }:
+                    holders.append(above[-1])
                 break
-        if held_cabin is None:
+        if len(holders) != 1:
             return {
                 "verdict": VERDICT_CABIN_UNRESOLVED,
                 "cabins_absent": absent,
+                "row_in_cabins": holders,
                 "detail": (
-                    f"no cabin on this aircraft has a row {row}, so seat {args.held!r} is not "
-                    "on it — check the seat and the flight, or pass --held-cabin to assess it "
-                    "against a cabin anyway"
-                ),
+                    (
+                        f"row {row} runs through {' and '.join(holders)} on this aircraft, so "
+                        f"which cabin holds seat {args.held!r} cannot be read off the layout"
+                    )
+                    if holders
+                    else (
+                        f"no cabin on this aircraft has a row {row}, so seat {args.held!r} is "
+                        "not on it — check the seat and the flight"
+                    )
+                )
+                + ". Pass --held-cabin to assess it against a named cabin.",
             }
+        held_cabin = holders[0]
 
     cabins = seat_quality.cabins_at_or_above(held_cabin, args.scan_up)
     absent = [c for c in absent if c in cabins]

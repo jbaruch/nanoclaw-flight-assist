@@ -8,7 +8,9 @@ Asking the operator for it was the obvious repair and the wrong one. The cabin i
 
 `held_cabin_from` reports `stated` or `resolved`, separately from `held_cabin_corroborated`, which reports how it was checked.
 
-A row no cabin on the aircraft holds returns `held_cabin_unresolved` rather than a verdict. The seat or the flight is wrong, and assessing it against a guessed cabin is what this replaces. A service without `rows` cannot resolve, and says so rather than guessing.
+A cabin boundary can fall mid-row — the 739's Comfort+ ends a row later on the right, which this repo already documented — so one row number belongs to two adjacent cabins. Resolution reads past the first match into the neighbour above to tell them apart; taking the first would hand a Comfort+ seat to the Main Cabin. Nothing further up the ladder can share a row, so the check costs one response the sweep usually fetches anyway.
+
+A row two cabins share, or a row no cabin on the aircraft holds, returns `held_cabin_unresolved` rather than a verdict. The seat or the flight is wrong, and assessing it against a guessed cabin is what this replaces. A service without `rows` cannot resolve, and says so rather than guessing.
 
 ### Fixed — a seat in a better cabin was reported as one to go and take
 

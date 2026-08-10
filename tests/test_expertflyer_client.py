@@ -1468,3 +1468,89 @@ def test_resolution_needs_the_service_to_report_rows(cabins):
     )
     assert out["error"] == "bad_request"
     assert "--held-cabin" in out["detail"]
+
+
+def test_a_row_split_across_two_cabins_is_not_resolved_silently(cabins):
+    """A cabin boundary can fall mid-row — the 739's Comfort+ ends a row later
+    on the right — so bottom-up resolution would hand a Comfort+ seat to Main."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 12)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["row_in_cabins"] == ["Y", "W"]
+    assert "runs through Y and W" in out["detail"]
+    assert "--held-cabin" in out["detail"]
+    assert "held" not in out
+
+
+def test_a_split_row_resolves_once_the_operator_names_the_cabin(cabins):
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = _cabin_with_rows(
+        "W", [{"label": "10C", "row": 10, "column": "C", "position": "aisle"}], [10, 11]
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-cabin",
+                "W",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "W"
+    assert out["held_cabin_from"] == "stated"
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+
+
+def test_a_row_in_one_cabin_only_still_resolves_without_asking(cabins):
+    """The neighbour is read to rule out a split, not to create ambiguity."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y", [{"label": "22A", "row": 22, "column": "A", "position": "window"}], list(range(16, 33))
+    )
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "Y"
+    assert out["held_cabin_from"] == "resolved"
+    assert out["verdict"] == client.VERDICT_OPTIMAL
