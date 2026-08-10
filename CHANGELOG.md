@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.103 — 2026-08-10
+
 ### Fixed — a TLS verification failure no longer reports as an unreachable service (#229)
 
 A certificate that could not be verified surfaced as `unreachable` with "check the service is running and EXPERTFLYER_API_URL points at it". The service had answered; only its chain failed validation, so that message sends the operator to the wrong layer.
