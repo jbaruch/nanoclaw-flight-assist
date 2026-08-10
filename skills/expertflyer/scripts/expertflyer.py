@@ -139,9 +139,15 @@ def parse_args(argv=None):
     seats.add_argument("--origin")
     seats.add_argument("--destination")
     seats.add_argument(
-        "--no-date-fallback",
+        "--date-fallback",
         action="store_true",
-        help="Do not retry the previous day when the flight is not found on --date",
+        help=(
+            "Retry the previous day when the flight is not found on --date. "
+            "Only for dates derived from the UTC travel schedule, where a late "
+            "local departure lands on the next UTC day. Off by default: for a "
+            "date the operator named, a flight that does not operate that day "
+            "must report that, not seats from another day's flight."
+        ),
     )
 
     fare = sub.add_parser("fare-class", help="Fare-class inventory for a flight")
@@ -192,7 +198,10 @@ def run(args) -> dict:
             )
 
         result = seats_on(args.date)
-        if _looks_like_wrong_date(result) and not args.no_date_fallback:
+        # Opt-in only. The retry is sound when the date came from the UTC
+        # schedule; against a date the operator named it would answer about a
+        # different day's flight and present it as the requested one.
+        if _looks_like_wrong_date(result) and args.date_fallback:
             try:
                 fallback = _previous_day(args.date)
             except ValueError:

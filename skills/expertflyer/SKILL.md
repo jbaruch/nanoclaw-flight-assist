@@ -76,7 +76,7 @@ Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origi
 
 Say nothing about a flight whose cabin is absent from the aircraft. Every other flight gets one of the two lines above.
 
-The client retries the previous day by itself when the flight is not found on the given date, and reports `date_fallback_applied` when it did. Pass `--no-date-fallback` to suppress that.
+Pass `--date-fallback` on these schedule-derived calls: the schedule stamps UTC, so a late local departure lands on the next UTC day. The client then retries the previous day itself and reports `date_fallback_applied` when it did. Do not pass it in Step 2, where the operator named the date.
 
 Finish here unless the operator accepts an alert.
 

@@ -401,12 +401,17 @@ def test_a_flight_missing_on_the_utc_date_is_retried_on_the_previous_day(monkeyp
         return {"cabin": "W", "seats": [], "available_total": 0}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(client.parse_args(_seats_argv("2024-03-07")))
+    out = client.run(client.parse_args(_seats_argv("2024-03-07", "--date-fallback")))
     assert calls == ["2024-03-07", "2024-03-06"]
     assert out["date_fallback_applied"] == "2024-03-06"
 
 
-def test_the_fallback_can_be_suppressed(monkeypatch):
+def test_the_fallback_is_off_unless_asked_for(monkeypatch):
+    """A date the operator named is not a UTC-schedule artefact.
+
+    Retrying it would answer about the previous day's flight and present those
+    seats as the requested one's.
+    """
     calls = []
 
     def fake(method, path, params=None, body=None):
@@ -415,7 +420,7 @@ def test_the_fallback_can_be_suppressed(monkeypatch):
         return {"error": "error", "detail": "could not resolve a route for DL9"}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(client.parse_args(_seats_argv("2024-03-07", "--no-date-fallback")))
+    out = client.run(client.parse_args(_seats_argv("2024-03-07")))
     assert calls == ["2024-03-07"]
     assert out["error"] == "error"
 
@@ -430,7 +435,7 @@ def test_an_unrelated_error_is_not_retried(monkeypatch):
         return {"error": "auth", "detail": "session expired"}
 
     monkeypatch.setattr(client, "_request", fake)
-    client.run(client.parse_args(_seats_argv("2024-03-07")))
+    client.run(client.parse_args(_seats_argv("2024-03-07", "--date-fallback")))
     assert calls == ["2024-03-07"]
 
 
@@ -458,7 +463,7 @@ def test_a_failed_retry_reports_its_own_error_not_the_first_one(monkeypatch):
         return {"error": "auth", "detail": "session expired"}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(client.parse_args(_seats_argv("2024-03-07")))
+    out = client.run(client.parse_args(_seats_argv("2024-03-07", "--date-fallback")))
     assert out["error"] == "auth"
     assert out["detail"] == "session expired"
     assert out["date_fallback_attempted"] == "2024-03-06"
@@ -473,6 +478,6 @@ def test_a_malformed_date_reports_rather_than_tracebacks(monkeypatch):
         return {"error": "error", "detail": "could not resolve a route for DL9"}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(client.parse_args(_seats_argv("next tuesday")))
+    out = client.run(client.parse_args(_seats_argv("next tuesday", "--date-fallback")))
     assert out["error"] == "bad_request"
     assert "YYYY-MM-DD" in out["detail"]
