@@ -1153,3 +1153,80 @@ def test_a_service_without_rows_still_corroborates_and_never_disproves(cabins):
     assert out["held_cabin_corroborated"] is None
     assert out["held_cabin_source"] == "seats"
     assert out["verdict"] == client.VERDICT_UPGRADE
+
+
+# --- why the held seat won, per cabin ----------------------------------------
+
+
+def test_the_true_reason_per_cabin_is_reported(cabins):
+    """The live DL2957 report claimed 21F "beat even Comfort+". It did not:
+    Comfort+ outranks a Main exit row, and only had nothing acceptable open.
+    `acceptable_by_cabin` is that distinction as data."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y",
+        [
+            {"label": "21A", "row": 21, "column": "A", "position": "window", "isExitRow": True},
+            {"label": "19B", "row": 19, "column": "B", "position": "middle", "isExitRow": True},
+        ],
+        list(range(16, 33)),
+        exit_rows=[19, 20, 21],
+    )
+    # Comfort+ open but every seat a middle: nothing worth taking.
+    cabins["W"] = _cabin_with_rows(
+        "W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}], list(range(10, 21))
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    # W had nothing worth taking — not "W lost to 21F".
+    assert out["acceptable_by_cabin"]["W"] == 0
+    assert out["acceptable_by_cabin"]["Y"] == 1
+    assert out["alert_recommended"] is True
+
+
+def test_a_comfort_plus_seat_worth_taking_still_beats_a_main_exit_row(cabins):
+    """The counterpart: the moment W has an acceptable seat, it wins. Any
+    report claiming the exit row outranks the cabin is wrong."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(16, 33)), exit_rows=[19, 20, 21])
+    cabins["W"] = _cabin_with_rows(
+        "W", [{"label": "14A", "row": 14, "column": "A", "position": "window"}], list(range(10, 21))
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_UPGRADE
+    assert out["best_upgrade"] == "14A (window)"
+    assert out["acceptable_by_cabin"]["W"] == 1

@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.109 — 2026-08-10
+### Fixed — the trip report explained the verdict wrongly, and never offered the alert
+
+Both found in the first live trip sweep, which returned correct verdicts and then described one of them backwards.
+
+The report said 21F "beat even Comfort+". It did not. Comfort+ outranks a Main Cabin exit row — the ladder that #254 fixed says so — and 21F won only because nothing acceptable was open in Comfort+. Right answer, invented reason, and the reason is what an operator acts on next time.
+
+The output gave `upgrades: []` and no way to tell an empty cabin from a beaten one, so the gap was there to fill. `acceptable_by_cabin` now reports, per cabin, how many open seats were worth taking. `0` means a cabin that had nothing, not a cabin that lost. Step 3 states the distinction and forbids the claim: `optimal` compares the held seat against seats that were open, never against a cabin's standing.
+
+Step 4 never offered the alert. Step 3's `optimal` rules require it, but the per-flight reporting list in Step 4 omitted it entirely, so a sweep reported four seats as fine and offered nothing to watch. The trip report now makes one alert offer covering every flight whose `alert_recommended` is true — a seat that is the best of nothing open is exactly the seat worth watching.
 
 ### Fixed — the seat pass covered every upcoming flight, not the trip asked about
 
