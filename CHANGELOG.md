@@ -8,6 +8,18 @@ The gateway is what swaps the real bearer in for the `onecli-managed` placeholde
 
 Now `http://172.17.0.1:8090`, addressing the bridge gateway by IP, with a test pinning it so the friendlier hostname cannot be restored without failing the suite.
 
+### Added — seat-quality ranking for the ExpertFlyer skill (#229)
+
+`skills/expertflyer/scripts/seat_quality.py` encodes the operator's seat preferences as an ordering, so "what's open" can become "what's worth taking".
+
+Ranking is preference, not fact, so it lives in this plugin rather than the `expertflyer-api` service: the service reports what a seat *is*, this decides what it is *worth*.
+
+A middle seat is **excluded**, not ranked last — it can never be offered nor count as an upgrade. On DL2957, whose Comfort+ cabin has exactly two free seats and both are middles, the correct output is nothing at all.
+
+Window beats aisle, but graded rather than absolutely: `WINDOW_WORTH_ROWS = 3` is the exchange rate, so a window up to three rows further back still wins and a fourth row back loses to the aisle up front. Closer to the front breaks ties; bulkhead is neutral. An exit row outranks forward position, and reclining beats fixed-back. Comfort+ outranks an exit row, because it buys forward position *and* leg room where an exit row buys only leg room.
+
+Every rule is a named constant with a test that states it, so tuning is a one-line change that fails a named test rather than silently shifting recommendations. An unclassified seat raises instead of ranking arbitrarily.
+
 ## 0.2.97 — 2026-08-09
 
 ### Added — ExpertFlyer seat and fare-class checks, via a service (#229)
