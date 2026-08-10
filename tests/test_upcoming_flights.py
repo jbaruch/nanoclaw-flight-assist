@@ -333,3 +333,26 @@ def test_a_schedule_with_no_trips_covers_nothing_and_says_so(tmp_path, capsys):
     assert out["count"] == 0
     assert out["excluded_count"] == 1
     assert out["trips"] == []
+
+
+def test_a_negative_trip_count_is_rejected_not_read_as_unbounded(tmp_path, capsys):
+    """Only zero means every flight. A typo'd -1 reaching that mode turns a
+    four-flight pass into the whole schedule, against a bot-walled service."""
+    events = [
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        event("DL2637 BNA to ATL", "2024-03-06T10:14:00Z", uid="f1"),
+        event("DL891 BNA to LAX", "2024-03-20T11:20:00Z", uid="f3"),
+    ]
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(events))
+    assert uf.main(["--schedule", str(path), "--now", NOW, "--trips", "-1"]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["error"] == "bad_trips"
+    assert "0 for every upcoming flight" in captured.err
+
+
+def test_only_zero_opens_the_pass_to_every_trip():
+    events = [trip("Toronto", "2024-03-06", "2024-03-07", uid="t1")]
+    now = uf._parse_instant(NOW)
+    assert len(uf.upcoming_trips(events, now, 0)) == 1
+    assert uf.upcoming_trips(events, now, -1) == []

@@ -155,7 +155,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/upcoming-flights.py
 
 Outputs `{"flights": [...], "count": N, "trips": [...], "excluded": [...], "excluded_count": N}`. Each flight carries `airline`, `flight`, `origin`, `destination`, `date`, `departs_utc`, `summary` and `uid`, soonest first.
 
-The pass covers the next trip. Every flight costs a request per cabin against a bot-walled service, and the whole upcoming schedule is months of them. `--trips N` widens it; `--trips 0` covers every upcoming flight. The default, the lead window and the trip-edge slack are named constants in `skills/expertflyer/scripts/upcoming-flights.py`.
+The pass covers the next trip. `--trips N` widens it to the next N; `--trips 0` covers every upcoming flight. The default, the lead window and the trip-edge slack are named constants in `skills/expertflyer/scripts/upcoming-flights.py`.
 
 `excluded` holds the upcoming flights the trip bound left out. Say how many when the operator asked about their seats generally rather than about one trip. `trips` names what was covered.
 

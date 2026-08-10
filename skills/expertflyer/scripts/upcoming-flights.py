@@ -162,7 +162,7 @@ def upcoming_trips(events, now: datetime, limit: int) -> list[dict]:
             continue
         found[str(trip["uid"] or f"{trip['summary']}{trip['start']}")] = trip
     ordered = sorted(found.values(), key=lambda t: (t["opens"], t["start"]))
-    return ordered if limit <= 0 else ordered[:limit]
+    return ordered if limit == 0 else ordered[:limit]
 
 
 def _within(trip: dict, departs: datetime) -> bool:
@@ -260,9 +260,18 @@ def main(argv=None) -> int:
         print(f"upcoming-flights: {exc}", file=sys.stderr)
         return 1
 
+    if args.trips < 0:
+        print(json.dumps({"error": "bad_trips", "detail": f"--trips {args.trips} is negative"}))
+        print(
+            f"upcoming-flights: --trips {args.trips} is negative — pass a count of "
+            "trips to cover, or 0 for every upcoming flight",
+            file=sys.stderr,
+        )
+        return 1
+
     flights = upcoming_flights(events, now, args.min_lead_hours)
     trips = upcoming_trips(events, now, args.trips)
-    if args.trips <= 0:
+    if args.trips == 0:
         covered, excluded = flights, []
     else:
         covered = [f for f in flights if _in_any_trip(trips, f)]
