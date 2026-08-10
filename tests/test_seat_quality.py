@@ -439,7 +439,7 @@ def test_an_unknown_cabin_raises_rather_than_scoring_as_main():
 
 
 def test_an_unknown_cabin_names_the_seat_it_came_from():
-    """Step 5 relays `detail` and promises it names the seat, so a cabin fault
+    """Step 6 relays `detail` and promises it names the seat, so a cabin fault
     has to carry the label too — `cabin_code` alone does not know it."""
     with pytest.raises(sq.SeatQualityError, match="2A"):
         sq.seat_cabin({"label": "2A", "row": 2, "position": "window", "cabin": "P"})

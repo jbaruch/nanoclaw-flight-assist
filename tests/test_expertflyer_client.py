@@ -564,7 +564,7 @@ def test_an_unknown_cabin_is_reported_rather_than_ranked_as_main():
     out = client._rank(payload)
     assert out["error"] == "unrankable"
     assert "'P'" in out["detail"]
-    # Step 5 relays `detail` and promises it names the seat.
+    # Step 6 relays `detail` and promises it names the seat.
     assert "2A" in out["detail"]
 
 
