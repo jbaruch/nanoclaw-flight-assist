@@ -1582,6 +1582,7 @@ def test_a_neighbour_that_failed_is_not_evidence_the_row_is_unshared(cabins):
     )
     assert out["error"] == "blocked"
     assert out["cabin_failed"] == "W"
+    assert out["cabins_requested"] == ["W", "Y"]
     assert "shared with Y" in out["detail"]
     assert "verdict" not in out
 

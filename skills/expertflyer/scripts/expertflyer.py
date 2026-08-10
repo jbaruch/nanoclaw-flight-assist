@@ -387,6 +387,14 @@ def _assess(args) -> dict:
             fetched[cabin] = _seats_in_cabin(args, cabin, "any")
         return fetched[cabin]
 
+    def requested_so_far() -> list[str]:
+        """The cabins this run has asked for, best first.
+
+        Resolution has no planned list — finding the cabin is what it is for —
+        so the contract's `cabins_requested` is what it got through.
+        """
+        return sorted(fetched, key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True)
+
     cabin_source = "stated"
     if held_cabin is None:
         # The seat's cabin is a fact about the aircraft, not something the
@@ -403,6 +411,7 @@ def _assess(args) -> dict:
                     "error": response["error"],
                     "detail": f"{candidate}: {response.get('detail', response['error'])}",
                     "cabin_failed": candidate,
+                    "cabins_requested": requested_so_far(),
                 }
             if response.get("cabin_present") is False:
                 absent.append(candidate)
@@ -439,6 +448,7 @@ def _assess(args) -> dict:
                             f"— read to check whether row {row} is shared with {candidate}"
                         ),
                         "cabin_failed": neighbour_cabin,
+                        "cabins_requested": requested_so_far(),
                     }
                 if neighbour.get("cabin_present") is not False:
                     if neighbour.get("rows") is None:
