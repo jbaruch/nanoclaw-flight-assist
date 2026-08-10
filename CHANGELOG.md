@@ -10,6 +10,8 @@ An unrecognised cabin raises rather than scoring as Main Cabin. Silently ranking
 
 `expertflyer.py` reports a refused ranking as `{"error": "unrankable"}` with the offending seat named, rather than letting `SeatQualityError` reach the operator as a traceback — the ranker now raises on the production path where it previously could not. `ranked`, `best` and `acceptable_total` are dropped from that response so a partial ranking cannot read as a complete one.
 
+The skill carries the new error's flow rather than leaving it to the agent. Step 5 names `unrankable` as the one value that is not an access fault — the service answered, so the access diagnostic it otherwise runs would investigate a layer that is working. Step 2 gains a first rule for a response carrying `error`: `best` is absent rather than `null`, and the two mean opposite things. `null` is "nothing here is worth taking, watch it"; absent is "nothing was ranked", so offering an alert would claim a seat is missing when its quality was never established.
+
 A seat whose `position` is present but unrecognised now says so, naming the value. It previously reported "no window/aisle/middle flag", which sends the operator to look for a missing field when the field is there with a word the ranker does not know.
 
 ## 0.2.103 — 2026-08-10
