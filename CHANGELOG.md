@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.105 — 2026-08-10
+
 ### Added — `assess`, which judges the seat already held rather than the cabin around it
 
 The seat pass answered a different question from the one asked. "Make sure I have the best seats" ran a cabin scan, which reports what is open; whether any of it beats the seat already assigned is a comparison the scan never made. The agent made it by eye instead, and got it backwards — it reasoned that a Main Cabin exit row was equivalent to Comfort+, contradicting the ranker's own documented rule, because nothing forced the comparison through code.
