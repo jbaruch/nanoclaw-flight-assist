@@ -165,6 +165,7 @@ VERDICT_UPGRADE = "upgrade"
 VERDICT_NO_HELD_SEAT = "no_held_seat"
 VERDICT_POSITION_UNKNOWN = "held_position_unknown"
 VERDICT_NOTHING_OPEN = "nothing_open"
+VERDICT_CABIN_MISMATCH = "held_cabin_mismatch"
 
 
 def _has_row(response: dict, row: int) -> bool:
@@ -422,19 +423,45 @@ def _assess(args) -> dict:
     # appears in two cabins. Absence here is not disproof of membership, and
     # disproving it needs the cabin's row layout the service does not yet
     # report (jbaruch/expertflyer-api#20).
-    seen_in_held = _has_row(scanned[held_cabin], row)
-    common["held_cabin_corroborated"] = True if seen_in_held else None
-    if not seen_in_held:
-        # A hint for the agent to confirm the cabin, never a verdict.
-        common["row_seen_in"] = sorted(
-            code
-            for code, response in scanned.items()
-            if code != held_cabin and _has_row(response, row)
-        )
+    held_rows = scanned[held_cabin].get("rows")
+    if held_rows is not None:
+        # The cabin's full extent, sold out or not. Membership is decidable
+        # from the held cabin's own response, so nothing else has to be read.
+        common["held_cabin_source"] = "rows"
+        common["held_cabin_corroborated"] = row in {int(r) for r in held_rows}
+        if not common["held_cabin_corroborated"]:
+            elsewhere = sorted(
+                code
+                for code, response in scanned.items()
+                if code != held_cabin and row in {int(r) for r in (response.get("rows") or [])}
+            )
+            extent = f"rows {min(held_rows)}-{max(held_rows)}" if held_rows else "no rows"
+            return {
+                **common,
+                "verdict": VERDICT_CABIN_MISMATCH,
+                "held": held,
+                "detail": (
+                    f"seat {args.held!r} was assessed as a {held_cabin} seat, and {held_cabin} "
+                    f"runs {extent} on this aircraft, so row {row} is not in it"
+                    + (f" — it is in {', '.join(elsewhere)}" if elsewhere else "")
+                    + ". Re-run with the right --held-cabin. The cabin decides the ladder rung "
+                    "and the exit-row layout, so every part of the verdict depends on it."
+                ),
+            }
+    else:
+        # A service without `rows` (expertflyer-api before #20) can corroborate
+        # and never disprove: `/seats` reports bookable seats, so a row whose
+        # every seat is taken is missing from the cabin it is in.
+        common["held_cabin_source"] = "seats"
+        common["held_cabin_corroborated"] = _has_row(scanned[held_cabin], row) or None
+        if common["held_cabin_corroborated"] is None:
+            # A hint for the agent to confirm the cabin, never a verdict.
+            common["row_seen_in"] = sorted(
+                code
+                for code, response in scanned.items()
+                if code != held_cabin and _has_row(response, row)
+            )
 
-    # A sweep that saw nothing has nothing to compare. `optimal` off an empty
-    # evidence base is true the way "no counterexample was found" is true after
-    # looking in no drawers — and it reads as a comparison that happened.
     # Rendered before the early returns: a response that carries `held` with a
     # known position carries its description too. Only an unknown position has
     # nothing to render, and that shape says so.
@@ -447,6 +474,9 @@ def _assess(args) -> dict:
         except seat_quality.SeatQualityError as exc:
             return {**common, "error": "unrankable", "detail": str(exc), "held": held}
 
+    # A sweep that saw nothing has nothing to compare. `optimal` off an empty
+    # evidence base is true the way "no counterexample was found" is true after
+    # looking in no drawers — and it reads as a comparison that happened.
     if not open_seats:
         return {
             **common,
@@ -548,6 +578,7 @@ UNANSWERED = frozenset(
         VERDICT_NO_HELD_SEAT,
         VERDICT_POSITION_UNKNOWN,
         VERDICT_NOTHING_OPEN,
+        VERDICT_CABIN_MISMATCH,
     }
 )
 

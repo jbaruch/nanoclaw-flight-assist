@@ -1088,3 +1088,66 @@ def test_every_shape_carrying_a_held_seat_describes_it(cabins):
     unknown = _assess(held="21F")
     assert unknown["verdict"] == client.VERDICT_POSITION_UNKNOWN
     assert "why" not in unknown["held"]
+
+
+# --- cabin membership, decided from the cabin's row extent -------------------
+
+
+def _cabin_with_rows(code, seats, rows, *, exit_rows=None):
+    payload = _cabin(code, seats, exit_rows=exit_rows)
+    payload["rows"] = rows
+    return payload
+
+
+def test_a_row_outside_the_held_cabin_s_extent_is_a_mismatch(cabins):
+    """The live DL2957 case, now decidable: Comfort+ runs 10-20, so 21F is not
+    in it however sold out the cabin is."""
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 21)))
+    cabins["A"] = _cabin("A", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_CABIN_MISMATCH
+    assert out["held_cabin_corroborated"] is False
+    assert out["held_cabin_source"] == "rows"
+    assert "rows 10-20" in out["detail"]
+    assert "upgrades" not in out
+
+
+def test_the_mismatch_names_the_cabin_the_row_belongs_to(cabins):
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 21)))
+    cabins["A"] = _cabin_with_rows("A", [], list(range(21, 40)))
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_CABIN_MISMATCH
+    assert "it is in A" in out["detail"]
+
+
+def test_a_sold_out_cabin_still_confirms_membership(cabins):
+    """`rows` is layout, so an empty `seats` no longer means unknown — the case
+    the seat-derived check could never settle."""
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 22)))
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is True
+    assert out["held_cabin_source"] == "rows"
+    assert out["verdict"] == client.VERDICT_NOTHING_OPEN
+    assert "row_seen_in" not in out
+
+
+def test_an_occupied_row_is_not_mistaken_for_an_absent_one(cabins):
+    """Every seat in row 21 taken, and the row is still in the cabin. The
+    seat-derived check called this unknown; `rows` calls it what it is."""
+    cabins["W"] = _cabin_with_rows(
+        "W",
+        [{"label": "12A", "row": 12, "column": "A", "position": "window"}],
+        list(range(10, 22)),
+    )
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is True
+    assert out["verdict"] == client.VERDICT_UPGRADE
+
+
+def test_a_service_without_rows_still_corroborates_and_never_disproves(cabins):
+    """Older expertflyer-api: no `rows`, so absence stays undecidable."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is None
+    assert out["held_cabin_source"] == "seats"
+    assert out["verdict"] == client.VERDICT_UPGRADE

@@ -51,3 +51,13 @@ so only the service can tell `auth` from `blocked`. Relay its verdict.
 
 Those four are the service's. `unrankable` is the client's own and means the
 service answered fine — see SKILL.md Step 6 (Diagnose access) for its flow.
+
+## `rows` is the cabin's extent, and settles which cabin a seat is in
+
+`/seats` reports `rows`: every row of the cabin holding a real seat, sold out
+or not, with `exit_rows` a subset of it. A seat the operator already holds is
+not bookable and appears in no seat list, so its cabin cannot be read off
+`seats` — a cabin running rows 10-20 says on its own that row 21 is elsewhere.
+
+An older service omits `rows`. Without it a held row's absence from `seats`
+proves nothing: the row may be in the cabin with every seat taken.

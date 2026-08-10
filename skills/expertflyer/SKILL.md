@@ -91,7 +91,7 @@ Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent
 
 `cabins_scanned` is the whole evidence base and `seats_compared` is its size. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
 
-`held_cabin_corroborated` is `true` when the sweep saw the held seat's row in the cabin it was assessed as, and `null` when it did not. It is never `false`: absence is not disproof. The derivation is in `skills/expertflyer/scripts/expertflyer.py`.
+`held_cabin_corroborated` is `true` when the held seat's row is in the cabin it was assessed as, `false` when it is not, and `null` when the service could not settle it. `held_cabin_source` says which answered: `rows` is the cabin's own extent and decides it either way, `seats` is the older availability-derived fallback and can only ever confirm. Derivation is in `skills/expertflyer/scripts/expertflyer.py`.
 
 On `null`, `row_seen_in` names the scanned cabins where the row did turn up. A non-empty list is a reason to confirm the cabin with the operator before acting on the verdict. Report the assessment either way.
 
@@ -128,11 +128,17 @@ Never report `optimal` as "nothing better exists". The sweep reads `cabins_scann
 - Offer to widen the sweep with `--scan-up`.
 - Check the cabin: a sold-out cabin and a seat that is not in that cabin look identical here.
 
+**`held_cabin_mismatch`** — the held seat's row is outside the extent of the cabin it was assessed as.
+
+- Relay `detail`. It names the cabin's row range, and the cabin the row belongs to when the sweep saw it.
+- Re-run with the corrected `--held-cabin`.
+- Report no verdict from this run. The cabin sets the ladder rung and the exit-row layout.
+
 **`error`** — go to Step 6.
 
 - `cabin_failed` names the cabin that did not load.
 
-`no_held_seat`, `held_position_unknown` and `nothing_open` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
+`no_held_seat`, `held_position_unknown`, `nothing_open` and `held_cabin_mismatch` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
@@ -157,7 +163,7 @@ Report only the flights that need something:
 
 - `upgrade` → name the flight and `best_upgrade`
 - `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
-- `no_held_seat`, `held_position_unknown` or `nothing_open` → name the flight as unanswered, never as fine
+- `no_held_seat`, `held_position_unknown`, `nothing_open` or `held_cabin_mismatch` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 
 A flight whose verdict never came back is not a flight with good seats. Say which ones were not answered.
