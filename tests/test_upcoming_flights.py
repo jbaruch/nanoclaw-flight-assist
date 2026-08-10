@@ -356,3 +356,26 @@ def test_only_zero_opens_the_pass_to_every_trip():
     now = uf._parse_instant(NOW)
     assert len(uf.upcoming_trips(events, now, 0)) == 1
     assert uf.upcoming_trips(events, now, -1) == []
+
+
+def test_a_trip_that_just_ended_does_not_displace_the_next_one():
+    """Selecting on the flight-matching slack keeps a finished trip eligible
+    for another day, so the default limit picks it over the real next trip —
+    nothing to check, and tomorrow's trip reported as excluded."""
+    events = [
+        trip("Just ended", "2024-03-03", "2024-03-04", uid="t0"),
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        event("DL2637 BNA to ATL", "2024-03-06T10:14:00Z", uid="f1"),
+    ]
+    now = uf._parse_instant(NOW)  # 2024-03-05T00:00Z — one day after t0 ended
+    trips = uf.upcoming_trips(events, now, 1)
+    assert [t["summary"] for t in trips] == ["Toronto"]
+    flights = uf.upcoming_flights(events, now, uf.MIN_LEAD_HOURS)
+    assert [f for f in flights if uf._in_any_trip(trips, f)] == flights
+
+
+def test_a_trip_ending_today_is_still_upcoming():
+    """The end date is inclusive: a trip's last day is not over at midnight."""
+    events = [trip("Ends today", "2024-03-04", "2024-03-05", uid="t0")]
+    now = uf._parse_instant(NOW)
+    assert [t["summary"] for t in uf.upcoming_trips(events, now, 1)] == ["Ends today"]

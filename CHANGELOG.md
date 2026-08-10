@@ -8,6 +8,8 @@ The pass now covers the next trip, which is what the question means. The schedul
 
 Trip windows are date-only while a departure is a UTC instant, so a return leaving late in the local evening lands on the next UTC day and falls outside a trip that ended the evening before. The window covers its end date's whole day plus a day of slack each side, which absorbs that without reaching a trip separated by more.
 
+Whether a trip is over is decided on its real end, not the slack-expanded window. The slack exists to match a late-evening departure to its own trip; reusing it for selection kept a finished trip eligible for another day, so the default limit would pick it over the real next trip — nothing to check, and tomorrow's trip reported as excluded.
+
 A negative `--trips` is rejected rather than read as the unbounded mode. `limit <= 0` treated `-1` as "every flight", so a typo turned a four-flight pass into the whole schedule against the service the bound exists to protect. Only zero opens it.
 
 Excluded flights are reported, never silently absent. A caller reading `flights` as "everything upcoming" would tell the operator their seats are fine on a trip it never looked at — the same shape of unearned confidence the assess verdicts were fixed for.

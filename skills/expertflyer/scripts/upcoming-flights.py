@@ -140,9 +140,17 @@ def trip_from_event(event: dict) -> dict | None:
         "uid": event.get("uid"),
         "start": opens.date().isoformat(),
         "end": closes.date().isoformat(),
+        # When the trip is actually over. The end DATE is inclusive, so it runs
+        # to the end of that day — and no further. Selecting trips on the
+        # slack-expanded window below would keep a finished trip eligible for
+        # another day, and the default limit would pick it over the real next
+        # one: nothing to check, and the trip that mattered reported as
+        # excluded.
+        "ends_at": closes + timedelta(days=1),
+        # Wider, and for matching flights only. A departure late in the local
+        # evening lands on the next UTC day, so it falls outside the trip it
+        # belongs to without a day of slack each side.
         "opens": opens - TRIP_EDGE_SLACK,
-        # The end DATE is inclusive, so the window runs to the end of that day
-        # before the slack is added on top.
         "closes": closes + timedelta(days=1) + TRIP_EDGE_SLACK,
     }
 
@@ -158,7 +166,9 @@ def upcoming_trips(events, now: datetime, limit: int) -> list[dict]:
         if not isinstance(event, dict):
             continue
         trip = trip_from_event(event)
-        if trip is None or trip["closes"] < now:
+        # `<=`: `ends_at` is the start of the day after the trip's last, so a
+        # reference instant that has reached it is past the trip, not inside it.
+        if trip is None or trip["ends_at"] <= now:
             continue
         found[str(trip["uid"] or f"{trip['summary']}{trip['start']}")] = trip
     ordered = sorted(found.values(), key=lambda t: (t["opens"], t["start"]))
@@ -286,7 +296,7 @@ def main(argv=None) -> int:
                 "flights": covered,
                 "count": len(covered),
                 "trips": [
-                    {k: v for k, v in trip.items() if k not in ("opens", "closes")}
+                    {k: v for k, v in trip.items() if k not in ("opens", "closes", "ends_at")}
                     for trip in trips
                 ],
                 "excluded_count": len(excluded),
