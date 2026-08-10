@@ -1,4 +1,3 @@
-
 # Changelog
 
 ### Fixed — `optimal` off an empty evidence base, and a held cabin nothing checks
@@ -10,6 +9,14 @@ Both found on the first live run against the deployed service, and both let `ass
 `--held-cabin` was taken on faith. The cabin decides the ladder rung and the exit-row layout, so a wrong one poisons every part of the verdict downstream — and nothing checked it. On DL2957 seat 21F was assessed as Comfort+ while row 21 sits in the Main Cabin, an exit row that reclines; the sweep scanned Comfort+ and Premium Select and never looked at the cabin the seat is actually in.
 
 The held seat is occupied, so it never appears in a response, but its row can — under another passenger's seat in the same row. A row seen in a scanned cabin other than the one named, and nowhere in the one named, now returns `held_cabin_mismatch` naming where the row was actually found. The guard needs the real cabin to be in the sweep to fire, so it is a check on the sweep's own observations rather than a general cabin resolver.
+
+## 0.2.106 — 2026-08-10
+
+### Fixed — the byAir seat fields are named differently on read and on write
+
+Step 3 told the agent the held seat lives on byAir as `seat_number` / `seat_type`. Those are the parameter names `byair_update_booking_info` takes on write; `byair_get_flight` returns the seat as `seatNumber` / `seatType`. An agent reading the skill and looking for the snake_case keys finds neither, concludes byAir has no seat for the flight, and asks the operator for a seat byAir already holds.
+
+Confirmed against a live `byair_get_flight` payload for DL2957 on 2026-08-11.
 
 ## 0.2.105 — 2026-08-10
 
