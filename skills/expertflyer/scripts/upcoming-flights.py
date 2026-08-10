@@ -26,6 +26,7 @@ from pathlib import Path
 
 SCHEDULE_PATH = "/workspace/group/travel-schedule.json"
 FLIGHT_TYPE = "Flight"
+TRIP_TYPE = "Trip"
 
 # "DL2957 ATL to YYZ" — the carrier and number may or may not be spaced.
 SUMMARY_RE = re.compile(r"^\s*([A-Z]{2})\s?(\d{1,4})\s+([A-Z]{3})\s+to\s+([A-Z]{3})\s*$")
@@ -33,6 +34,18 @@ SUMMARY_RE = re.compile(r"^\s*([A-Z]{2})\s?(\d{1,4})\s+([A-Z]{3})\s+to\s+([A-Z]{
 # A departure inside this window is too close to act on: seats bought now
 # rarely beat what check-in already assigned.
 MIN_LEAD_HOURS = 12
+
+# How many upcoming trips the pass covers. Every flight costs the caller a
+# request per cabin against a bot-walled service, and the whole upcoming
+# schedule is months of them — the question is about the next trip, not the
+# year. Widen deliberately with --trips.
+DEFAULT_TRIPS = 1
+
+# Trip windows are date-only while a departure is a UTC instant, so a flight
+# leaving late in the local evening lands on the next UTC day and falls a day
+# outside its own trip. A day of slack each side absorbs that without reaching
+# the next trip, which is separated by far more.
+TRIP_EDGE_SLACK = timedelta(days=1)
 
 
 def parse_args(argv=None):
@@ -42,6 +55,15 @@ def parse_args(argv=None):
         "--now",
         required=True,
         help="Reference instant, ISO-8601 UTC. Injected so the output is deterministic.",
+    )
+    p.add_argument(
+        "--trips",
+        type=int,
+        default=DEFAULT_TRIPS,
+        help=(
+            "How many upcoming trips to cover. 0 covers every upcoming flight, "
+            "which is a request per cabin per flight against a bot-walled service."
+        ),
     )
     p.add_argument(
         "--min-lead-hours",
@@ -99,6 +121,57 @@ def flight_from_event(event: dict) -> dict | None:
         "summary": event.get("summary"),
         "uid": event.get("uid"),
     }
+
+
+def trip_from_event(event: dict) -> dict | None:
+    """Shape one schedule event into a trip window, or None when it is not one."""
+    if event.get("type") != TRIP_TYPE:
+        return None
+    start, end = event.get("start"), event.get("end")
+    if not start or not end:
+        return None
+    try:
+        opens = _parse_instant(str(start))
+        closes = _parse_instant(str(end))
+    except ScheduleError:
+        return None
+    return {
+        "summary": event.get("summary"),
+        "uid": event.get("uid"),
+        "start": opens.date().isoformat(),
+        "end": closes.date().isoformat(),
+        "opens": opens - TRIP_EDGE_SLACK,
+        # The end DATE is inclusive, so the window runs to the end of that day
+        # before the slack is added on top.
+        "closes": closes + timedelta(days=1) + TRIP_EDGE_SLACK,
+    }
+
+
+def upcoming_trips(events, now: datetime, limit: int) -> list[dict]:
+    """The next `limit` trips that have not ended, soonest first.
+
+    A trip already over cannot hold a flight worth a seat check, and a limit of
+    zero means every one of them.
+    """
+    found = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        trip = trip_from_event(event)
+        if trip is None or trip["closes"] < now:
+            continue
+        found[str(trip["uid"] or f"{trip['summary']}{trip['start']}")] = trip
+    ordered = sorted(found.values(), key=lambda t: (t["opens"], t["start"]))
+    return ordered if limit <= 0 else ordered[:limit]
+
+
+def _within(trip: dict, departs: datetime) -> bool:
+    return trip["opens"] <= departs <= trip["closes"]
+
+
+def _in_any_trip(trips, flight: dict) -> bool:
+    departs = _parse_instant(flight["departs_utc"])
+    return any(_within(trip, departs) for trip in trips)
 
 
 def upcoming_flights(events, now: datetime, min_lead_hours: int) -> list[dict]:
@@ -188,7 +261,30 @@ def main(argv=None) -> int:
         return 1
 
     flights = upcoming_flights(events, now, args.min_lead_hours)
-    print(json.dumps({"flights": flights, "count": len(flights)}))
+    trips = upcoming_trips(events, now, args.trips)
+    if args.trips <= 0:
+        covered, excluded = flights, []
+    else:
+        covered = [f for f in flights if _in_any_trip(trips, f)]
+        excluded = [f for f in flights if f not in covered]
+
+    # A dropped flight is reported, never silently absent: a caller that reads
+    # `flights` as "everything upcoming" would tell the operator their seats
+    # are fine on a trip it never looked at.
+    print(
+        json.dumps(
+            {
+                "flights": covered,
+                "count": len(covered),
+                "trips": [
+                    {k: v for k, v in trip.items() if k not in ("opens", "closes")}
+                    for trip in trips
+                ],
+                "excluded_count": len(excluded),
+                "excluded": excluded,
+            }
+        )
+    )
     return 0
 
 

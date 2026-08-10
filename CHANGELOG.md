@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.108 — 2026-08-10
+### Fixed — the seat pass covered every upcoming flight, not the trip asked about
+
+`upcoming-flights.py` had a lower bound and no upper one, so "make sure I have the best seats" was a work list of every flight on the schedule. Today that is 37 flights: at a request per cabin each, against a service that answers `blocked` when its bot wall trips, an hour of browser-driven traffic to answer a question about tomorrow.
+
+The pass now covers the next trip, which is what the question means. The schedule already carries `Trip` records with their windows, so the bound is the operator's own itinerary rather than an invented day count. `--trips N` widens it and `--trips 0` restores the old everything.
+
+Trip windows are date-only while a departure is a UTC instant, so a return leaving late in the local evening lands on the next UTC day and falls outside a trip that ended the evening before. The window covers its end date's whole day plus a day of slack each side, which absorbs that without reaching a trip separated by more.
+
+Excluded flights are reported, never silently absent. A caller reading `flights` as "everything upcoming" would tell the operator their seats are fine on a trip it never looked at — the same shape of unearned confidence the assess verdicts were fixed for.
 
 ### Added — the held seat's cabin is now checked, not assumed
 

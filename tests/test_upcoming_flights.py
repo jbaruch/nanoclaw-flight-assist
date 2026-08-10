@@ -128,7 +128,8 @@ def test_invalid_schedule_json_reports_actionably(tmp_path, capsys):
 def test_end_to_end_against_the_real_schedule_shape(tmp_path, capsys):
     path = tmp_path / "travel-schedule.json"
     path.write_text(json.dumps([DL2637, DL2957]))
-    assert uf.main(["--schedule", str(path), "--now", NOW]) == 0
+    # `--trips 0` — this pins the schedule shape, not the trip bound.
+    assert uf.main(["--schedule", str(path), "--now", NOW, "--trips", "0"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["count"] == 2
     assert out["flights"][0]["summary"] == "DL2637 BNA to ATL"
@@ -168,7 +169,7 @@ def test_a_missing_start_skips_the_event():
 def test_a_dict_root_with_an_events_key_is_accepted(tmp_path, capsys):
     path = tmp_path / "s.json"
     path.write_text(json.dumps({"events": [DL2957]}))
-    assert uf.main(["--schedule", str(path), "--now", NOW]) == 0
+    assert uf.main(["--schedule", str(path), "--now", NOW, "--trips", "0"]) == 0
     assert json.loads(capsys.readouterr().out)["count"] == 1
 
 
@@ -217,3 +218,118 @@ def test_every_failure_diagnostic_names_a_recovery_action(tmp_path, capsys):
 
     uf.main(["--schedule", str(tmp_path / "absent.json"), "--now", NOW])
     assert "nightly-travel-sync" in capsys.readouterr().err
+
+
+# --- the pass is bounded to the next trip -----------------------------------
+
+
+def trip(summary, start, end, uid=None):
+    return {
+        "schema_version": "2",
+        "summary": summary,
+        "start": start,
+        "end": end,
+        "type": "Trip",
+        "uid": uid,
+    }
+
+
+def test_the_pass_covers_the_next_trip_and_reports_what_it_dropped():
+    """Every flight costs a request per cabin against a bot-walled service, so
+    the whole upcoming schedule is not a work list."""
+    events = [
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        trip("San Francisco", "2024-03-20", "2024-03-24", uid="t2"),
+        event("DL2637 BNA to ATL", "2024-03-06T10:14:00Z", uid="f1"),
+        event("DL2957 ATL to YYZ", "2024-03-06T12:05:00Z", uid="f2"),
+        event("DL891 BNA to LAX", "2024-03-20T11:20:00Z", uid="f3"),
+    ]
+    now = uf._parse_instant(NOW)
+    flights = uf.upcoming_flights(events, now, uf.MIN_LEAD_HOURS)
+    trips = uf.upcoming_trips(events, now, 1)
+    covered = [f for f in flights if uf._in_any_trip(trips, f)]
+    assert [f["flight"] for f in covered] == ["2637", "2957"]
+    assert [t["summary"] for t in trips] == ["Toronto"]
+
+
+def test_a_late_local_departure_stays_inside_its_own_trip():
+    """The schedule stamps UTC, so a 22:50 local return lands on the next UTC
+    day and falls a day past a trip that ends the evening before."""
+    events = [
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        event("DL3121 ATL to BNA", "2024-03-08T02:50:00Z", uid="f1"),
+    ]
+    now = uf._parse_instant(NOW)
+    trips = uf.upcoming_trips(events, now, 1)
+    flights = uf.upcoming_flights(events, now, uf.MIN_LEAD_HOURS)
+    assert [f for f in flights if uf._in_any_trip(trips, f)] == flights
+
+
+def test_widening_to_more_trips_reaches_the_later_one():
+    events = [
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        trip("San Francisco", "2024-03-20", "2024-03-24", uid="t2"),
+    ]
+    now = uf._parse_instant(NOW)
+    assert [t["summary"] for t in uf.upcoming_trips(events, now, 2)] == [
+        "Toronto",
+        "San Francisco",
+    ]
+    # Zero means every upcoming trip, not none.
+    assert len(uf.upcoming_trips(events, now, 0)) == 2
+
+
+def test_a_trip_already_over_is_not_upcoming():
+    events = [trip("Past", "2024-02-01", "2024-02-03", uid="t0")]
+    assert uf.upcoming_trips(events, uf._parse_instant(NOW), 1) == []
+
+
+def test_a_trip_missing_its_window_is_skipped_not_guessed():
+    assert uf.trip_from_event({"type": "Trip", "summary": "No dates"}) is None
+    assert uf.trip_from_event({"type": "Trip", "start": "2024-03-06"}) is None
+    assert uf.trip_from_event({"type": "Trip", "start": "nonsense", "end": "x"}) is None
+
+
+def test_the_output_names_the_trips_and_the_flights_it_left_out(tmp_path, capsys):
+    events = [
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        event("DL2637 BNA to ATL", "2024-03-06T10:14:00Z", uid="f1"),
+        event("DL891 BNA to LAX", "2024-03-20T11:20:00Z", uid="f3"),
+    ]
+    path = tmp_path / "schedule.json"
+    path.write_text(json.dumps(events))
+    assert uf.main(["--schedule", str(path), "--now", NOW]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [f["flight"] for f in out["flights"]] == ["2637"]
+    assert out["excluded_count"] == 1
+    assert [f["flight"] for f in out["excluded"]] == ["891"]
+    assert [t["summary"] for t in out["trips"]] == ["Toronto"]
+    # The internal window bounds are not part of the contract.
+    assert "opens" not in out["trips"][0]
+
+
+def test_trips_zero_covers_every_upcoming_flight(tmp_path, capsys):
+    events = [
+        trip("Toronto", "2024-03-06", "2024-03-07", uid="t1"),
+        event("DL2637 BNA to ATL", "2024-03-06T10:14:00Z", uid="f1"),
+        event("DL891 BNA to LAX", "2024-03-20T11:20:00Z", uid="f3"),
+    ]
+    path = tmp_path / "schedule.json"
+    path.write_text(json.dumps(events))
+    assert uf.main(["--schedule", str(path), "--now", NOW, "--trips", "0"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["count"] == 2
+    assert out["excluded_count"] == 0
+
+
+def test_a_schedule_with_no_trips_covers_nothing_and_says_so(tmp_path, capsys):
+    """A flight belonging to no trip is dropped, and dropping it silently would
+    read as 'your seats are fine' on a trip never looked at."""
+    events = [event("DL2637 BNA to ATL", "2024-03-06T10:14:00Z", uid="f1")]
+    path = tmp_path / "schedule.json"
+    path.write_text(json.dumps(events))
+    assert uf.main(["--schedule", str(path), "--now", NOW]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["count"] == 0
+    assert out["excluded_count"] == 1
+    assert out["trips"] == []

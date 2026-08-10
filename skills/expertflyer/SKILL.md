@@ -153,7 +153,13 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/upcoming-flights.py
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, summary, uid}], "count": N}`, soonest first, already filtered to those far enough out to act on. The lead window is a named constant in `skills/expertflyer/scripts/upcoming-flights.py`.
+Outputs `{"flights": [...], "count": N, "trips": [...], "excluded": [...], "excluded_count": N}`. Each flight carries `airline`, `flight`, `origin`, `destination`, `date`, `departs_utc`, `summary` and `uid`, soonest first.
+
+The pass covers the next trip. Every flight costs a request per cabin against a bot-walled service, and the whole upcoming schedule is months of them. `--trips N` widens it; `--trips 0` covers every upcoming flight. The default, the lead window and the trip-edge slack are named constants in `skills/expertflyer/scripts/upcoming-flights.py`.
+
+`excluded` holds the upcoming flights the trip bound left out. Say how many when the operator asked about their seats generally rather than about one trip. `trips` names what was covered.
+
+`count: 0` with a non-empty `excluded` means no upcoming trip covers those flights. Report that rather than reporting nothing.
 
 Collect the held seat for every flight in one exchange before assessing any of them. Read each from byAir. Ask the operator once, in a single message, for every flight byAir has no seat for. Write each answer back to byAir.
 
