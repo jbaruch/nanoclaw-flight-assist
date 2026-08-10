@@ -425,12 +425,27 @@ def _assess(args) -> dict:
     # sitting in Main, one rung below. Probing down costs one request, and only
     # when the held cabin failed to corroborate the row itself.
     below = seat_quality.cabin_below(held_cabin)
+    probe_failed: dict | None = None
     if below is not None and below not in scanned and not _has_row(scanned[held_cabin], row):
         probe = _seats_in_cabin(args, below, "any")
         # A failed probe is not a verdict. The sweep proper already succeeded,
         # so a corroboration request that could not run leaves the cabin
-        # unconfirmed rather than turning a good answer into an error.
-        if "error" not in probe and probe.get("cabin_present") is not False:
+        # unconfirmed rather than turning a good answer into an error — but it
+        # is reported both ways, never swallowed: a caller reading a verdict
+        # has to know the cabin behind it went unchecked.
+        if "error" in probe:
+            probe_failed = {
+                "cabin": below,
+                "error": probe["error"],
+                "detail": probe.get("detail", probe["error"]),
+            }
+            print(
+                f"expertflyer: could not corroborate the held cabin — the {below} probe "
+                f"failed ({probe_failed['detail']}); the verdict below assumes seat "
+                f"{args.held!r} really is in {held_cabin}",
+                file=sys.stderr,
+            )
+        elif probe.get("cabin_present") is not False:
             probed[below] = probe
 
     elsewhere = sorted(
@@ -438,12 +453,25 @@ def _assess(args) -> dict:
         for code, response in {**scanned, **probed}.items()
         if code != held_cabin and _has_row(response, row)
     )
-    if elsewhere and not _has_row(scanned[held_cabin], row):
+    if _has_row(scanned[held_cabin], row):
+        corroborated = True
+    elif elsewhere:
+        corroborated = False
+    else:
+        # Nothing showed the row either way. Every cabin that could have is
+        # sold out, absent, or failed to load.
+        corroborated = None
+    common["held_cabin_corroborated"] = corroborated
+    if probed:
+        common["cabins_probed"] = sorted(probed)
+    if probe_failed is not None:
+        common["cabin_probe_failed"] = probe_failed
+
+    if corroborated is False:
         return {
             **common,
             "verdict": VERDICT_CABIN_MISMATCH,
             "held": held,
-            "cabins_probed": sorted(probed),
             "detail": (
                 f"seat {args.held!r} was assessed as a {held_cabin} seat, but row {row} shows up "
                 f"in {', '.join(elsewhere)} and nowhere in {held_cabin} — so the seat is very "

@@ -12,6 +12,10 @@ The held seat is occupied, so it never appears in a response, but its row can �
 
 The sweep only reads up the ladder, so the cabin a seat is mistaken for is the one cabin it never looks at: Comfort+ claimed while sitting in Main, one rung below. When the held cabin cannot corroborate the row itself, `assess` probes one rung down. That request sits outside `--scan-up` — it corroborates the cabin rather than widening the evidence base — and it runs only on the uncorroborated case, so the ordinary path costs nothing extra. A probe that errors leaves the cabin unconfirmed rather than turning a good answer into an error.
 
+A probe that fails is reported, never swallowed: `cabin_probe_failed` carries the fault and a stderr warning names it, because a caller reading a verdict has to know the cabin behind it went unchecked. `held_cabin_corroborated` states the outcome directly — `true` when the row was seen in the cabin claimed, `false` when seen only elsewhere, `null` when nothing could show it.
+
+The output contract is now stated per verdict rather than as one flat list. `optimal` and `upgrade` carry `upgrades`, `best_upgrade` and `alert_recommended`; every other verdict carries `detail` and none of those three. The absence is the contract — a verdict that judged nothing has no upgrade list — and saying so keeps an agent from reading a refusal as a malformed response.
+
 Both cabins being sold out defeats it: neither can show the row. The service holds the answer already — it parses every seat cell, sold out or not, which is how `exit_rows` covers an occupied exit row — so the durable fix is a cabin row list from the service (jbaruch/expertflyer-api#20).
 
 ## 0.2.106 — 2026-08-10

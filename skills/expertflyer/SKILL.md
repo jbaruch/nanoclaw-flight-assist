@@ -77,9 +77,15 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_upgrade`, `alert_recommended`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned` and `seats_compared`.
+Every response carries `verdict`, `held` (with `why` and `position_source`), `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`.
+
+`optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` instead and carries none of those three. Their absence is the contract, not a malformed response — a verdict that judged nothing has no upgrade list to report.
+
+`cabins_probed` and `cabin_probe_failed` appear only when a cabin below the sweep was read to corroborate the held seat's row.
 
 `cabins_scanned` is the whole evidence base and `seats_compared` is its size. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
+
+`held_cabin_corroborated` is `true` when the held seat's row was seen in the cabin it was assessed as, `false` when seen only elsewhere, `null` when nothing could show it either way. On `null`, say the cabin went unconfirmed. `cabin_probe_failed` names why when a probe is the reason.
 
 Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 

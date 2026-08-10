@@ -1090,3 +1090,74 @@ def test_a_row_present_in_the_held_cabin_is_no_mismatch(cabins):
         )
     )
     assert out["verdict"] in (client.VERDICT_OPTIMAL, client.VERDICT_UPGRADE)
+
+
+def test_a_failed_corroboration_probe_is_reported_never_swallowed(cabins, capsys):
+    """The probe is best-effort, so it does not fail the assessment — but a
+    caller reading a verdict has to know the cabin behind it went unchecked."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    cabins["Y"] = {"error": "blocked", "detail": "bot wall"}
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "W",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    # The sweep itself succeeded, so there is still a verdict.
+    assert out["verdict"] == client.VERDICT_UPGRADE
+    assert out["held_cabin_corroborated"] is None
+    assert out["cabin_probe_failed"]["cabin"] == "Y"
+    assert out["cabin_probe_failed"]["error"] == "blocked"
+    assert "could not corroborate" in capsys.readouterr().err
+
+
+def test_a_corroborated_cabin_says_so(cabins):
+    cabins["W"] = _cabin("W", [{"label": "21B", "row": 21, "column": "B", "position": "middle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held_cabin_corroborated"] is True
+    assert "cabins_probed" not in out
+    assert "cabin_probe_failed" not in out
+
+
+def test_a_cabin_nothing_could_confirm_is_neither_true_nor_false(cabins):
+    """Sold out above and below: no seat anywhere shows the row."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    cabins["Y"] = _cabin("Y", [])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "W",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["held_cabin_corroborated"] is None
+    assert out["verdict"] == client.VERDICT_UPGRADE
