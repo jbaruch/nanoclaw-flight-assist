@@ -93,7 +93,7 @@ Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent
 
 `cabin_openings` holds seats in a better cabin. Those are not a seat change — taking one is a fare change or an upgrade clearance. Never tell the operator to go select one. Step 1 answers whether the upgrade inventory exists.
 
-`alert_cabins` is what an alert should watch: the held cabin and one rung up, whatever the sweep read, minus any cabin already holding a seat worth taking. Offer the alert on those, never on every cabin in `cabins_scanned`. An empty list with `alert_recommended: false` means there is nothing to watch for.
+`alert_cabins` is the authoritative list of cabins to watch. Offer the alert on those and no others, never on every cabin in `cabins_scanned`. An empty list with `alert_recommended: false` means there is nothing to watch for. Selection lives in `skills/expertflyer/scripts/expertflyer.py` — the `ALERT_RUNGS` constant and the alert block in `_assess`.
 
 `cabins_scanned` is the whole evidence base, `seats_compared` is its size, and `acceptable_by_cabin` breaks it down per cabin into seats worth taking. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up` to see further, which does not widen `alert_cabins`.
 
@@ -113,7 +113,7 @@ Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 
 Never report `optimal` as "nothing better exists". The sweep reads `cabins_scanned` and stops. A cabin in `cabins_unscanned` may hold a better seat and was never looked at.
 
-Never say the held seat beat a cabin. `optimal` compares it against the seats that were open, never against a cabin's standing. `acceptable_by_cabin` gives the true reason per cabin: `0` means nothing there was worth taking, which is a cabin that was empty rather than a cabin that lost. A better cabin still outranks the held seat the moment an acceptable seat opens in it.
+Never say the held seat beat a cabin. `optimal` compares it against the seats that were open, never against a cabin's standing. `acceptable_by_cabin` gives the reason per cabin: `0` is a cabin with nothing worth taking.
 
 **`upgrade`** — an open seat in the held cabin beats it.
 
