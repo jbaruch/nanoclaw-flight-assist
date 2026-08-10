@@ -175,3 +175,41 @@ def test_describe_names_what_makes_the_seat_good():
         seat(30, "C", "aisle", exit_row=True, reclines=True), Y
     )
     assert "bulkhead" in sq.describe(seat(12, "A", "window", bulkhead=True), W)
+
+
+# --- the shape the service actually returns ----------------------------------
+
+
+def test_ranks_the_service_response_shape_directly():
+    """`/seats` reports `position` as a string, not isWindow/isAisle/isMiddle.
+
+    Verbatim from the deployed service for DL2957 ATL-YYZ: one bookable seat,
+    a middle in row 14. Ranking must consume this without translation.
+    """
+    live = [
+        {
+            "label": "14B",
+            "row": 14,
+            "column": "B",
+            "position": "middle",
+            "isExitRow": False,
+            "isBulkhead": False,
+            "cabin": "W",
+        }
+    ]
+    assert sq.rank_seats(live, W) == []
+    assert sq.best_seat(live, W) is None
+    assert sq.is_upgrade(live[0], None, W) is False
+
+
+def test_service_shape_window_and_aisle_rank_normally():
+    seats = [
+        {"label": "12C", "row": 12, "column": "C", "position": "aisle", "cabin": "W"},
+        {"label": "14A", "row": 14, "column": "A", "position": "window", "cabin": "W"},
+    ]
+    assert sq.rank_seats(seats, W)[0]["label"] == "14A"
+
+
+def test_an_unrecognised_position_string_raises_rather_than_guessing():
+    with pytest.raises(sq.SeatQualityError):
+        sq.is_acceptable({"row": 10, "label": "A", "position": "porthole"})

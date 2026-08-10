@@ -62,6 +62,16 @@ def is_acceptable(seat: dict) -> bool:
 
 
 def _position(seat: dict) -> str:
+    """Seat position, from whichever shape the caller supplies.
+
+    The expertflyer-api service reports a `position` string; the raw seat-map
+    payload it parses uses isWindow/isAisle/isMiddle booleans. Accept both, so
+    the ranker works against the API response and against a captured fixture
+    without a translation layer between them.
+    """
+    named = seat.get("position")
+    if named in POSITION_SCORE or named in EXCLUDED_POSITIONS:
+        return str(named)
     if seat.get("isWindow"):
         return "window"
     if seat.get("isAisle"):
