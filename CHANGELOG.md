@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.107 — 2026-08-10
+### Added — the held seat's cabin is now checked, not assumed
+
+`expertflyer-api` #20 landed `rows` on `/seats`: every row of the cabin holding a real seat, sold out or not. That settles a question this plugin could previously only guess at.
+
+The held seat is occupied, so it appears in no seat list, and `--held-cabin` was taken on faith. The cabin decides the ladder rung and scopes the exit-row layout, so a wrong one corrupts every part of the verdict. On DL2957 seat 21F was assessed as Comfort+ while it sits in the Main Cabin, an exit row that reclines.
+
+`assess` now reads the held cabin's own `rows`. A held row outside that extent returns `held_cabin_mismatch` naming the range and, when the sweep saw it, the cabin the row belongs to. `held_cabin_corroborated` becomes a real three-state answer and `held_cabin_source` says which evidence settled it.
+
+The earlier seat-derived check remains for a service without `rows`, and keeps its old limit: it confirms and never disproves, because a row whose every seat is taken is missing from the cabin it is in. Sold-out cabins were the case it could never settle, and the case `rows` answers outright.
 
 ### Fixed — `optimal` off an empty evidence base, and a held cabin nothing checks
 
