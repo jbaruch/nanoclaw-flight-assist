@@ -115,6 +115,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py aler
 The `error` value names the fault and is not re-derivable here — relay it verbatim:
 
 - `unreachable` — the service is down or `EXPERTFLYER_API_URL` is wrong. Nothing to retry until it is up.
+- `tls` — the service answered but its certificate could not be verified. The endpoint is fine; the trust store is not. The detail names the fix.
 - `auth` — the service could not authenticate; its `detail` carries ExpertFlyer's own message. It re-tries a login itself before reporting, so this means the credentials in the service need attention.
 - `blocked` — ExpertFlyer's bot wall rejected the request. Never retry it in a loop.
 

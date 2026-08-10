@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -74,6 +75,21 @@ def _request(method: str, path: str, params: dict | None = None, body: dict | No
             return {"error": detail.get("error", "upstream"), "detail": detail.get("detail", raw)}
         return {"error": "upstream", "detail": detail, "status": exc.code}
     except urllib.error.URLError as exc:
+        # A TLS verification failure means the service ANSWERED and its
+        # certificate could not be validated — telling the operator to check
+        # whether it is running sends them to the wrong place entirely.
+        if isinstance(exc.reason, ssl.SSLCertVerificationError):
+            return {
+                "error": "tls",
+                "detail": (
+                    f"TLS verification failed for {_base_url()} "
+                    f"({exc.reason.verify_message or exc.reason.reason}) — the service "
+                    "responded but its certificate chain could not be verified. On a "
+                    "host whose Python does not read the system trust store (macOS), "
+                    "set SSL_CERT_FILE to a CA bundle, e.g. "
+                    "SSL_CERT_FILE=$(python3 -m certifi)"
+                ),
+            }
         return {
             "error": "unreachable",
             "detail": (

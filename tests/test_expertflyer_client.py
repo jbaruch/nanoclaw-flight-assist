@@ -13,6 +13,7 @@ flattening it, and never mistakes a failure for a result.
 import email.message
 import importlib.util
 import json
+import ssl
 import urllib.error
 from io import BytesIO
 from pathlib import Path
@@ -481,3 +482,47 @@ def test_a_malformed_date_reports_rather_than_tracebacks(monkeypatch):
     out = client.run(client.parse_args(_seats_argv("next tuesday", "--date-fallback")))
     assert out["error"] == "bad_request"
     assert "YYYY-MM-DD" in out["detail"]
+
+
+# --- a certificate failure is not an unreachable service ---------------------
+
+
+def _url_error(reason, monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.URLError(reason)
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+
+
+def test_a_certificate_failure_is_reported_as_tls_not_unreachable(monkeypatch):
+    """The service answered; only verification failed.
+
+    Reporting "check the service is running" sends the operator to the wrong
+    layer — the endpoint is fine and the trust store is not.
+    """
+    reason = ssl.SSLCertVerificationError("unable to get local issuer certificate")
+    reason.verify_message = "unable to get local issuer certificate"
+    reason.reason = "CERTIFICATE_VERIFY_FAILED"
+    _url_error(reason, monkeypatch)
+
+    result = client.run(client.parse_args(["alerts"]))
+    assert result["error"] == "tls"
+    assert "SSL_CERT_FILE" in result["detail"]
+    assert "check the service is running" not in result["detail"]
+
+
+def test_a_refused_connection_is_still_unreachable(monkeypatch):
+    """The ordinary case must keep pointing at the service and the URL."""
+    _url_error(ConnectionRefusedError(61, "Connection refused"), monkeypatch)
+    result = client.run(client.parse_args(["alerts"]))
+    assert result["error"] == "unreachable"
+    assert client.URL_ENV in result["detail"]
+
+
+def test_a_tls_failure_still_exits_non_zero(monkeypatch, capsys):
+    reason = ssl.SSLCertVerificationError("bad chain")
+    reason.verify_message = "bad chain"
+    reason.reason = "CERTIFICATE_VERIFY_FAILED"
+    _url_error(reason, monkeypatch)
+    assert client.main(["alerts"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "tls"

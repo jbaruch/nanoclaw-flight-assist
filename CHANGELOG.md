@@ -1,5 +1,13 @@
 # Changelog
 
+### Fixed — a TLS verification failure no longer reports as an unreachable service (#229)
+
+A certificate that could not be verified surfaced as `unreachable` with "check the service is running and EXPERTFLYER_API_URL points at it". The service had answered; only its chain failed validation, so that message sends the operator to the wrong layer.
+
+It is now a distinct `tls` error naming the fix: on a host whose Python does not read the system trust store, set `SSL_CERT_FILE` to a CA bundle. Following the message makes the same call succeed.
+
+Ordinary connection failures keep the `unreachable` wording, which is still where they should be looked at. In the container this path does not arise — the service is reached over plain HTTP on the docker bridge — but the diagnostic is what a person reads when verifying by hand from a machine on the tailnet.
+
 ## 0.2.102 — 2026-08-10
 
 ### Added — review seats across upcoming flights (#229)

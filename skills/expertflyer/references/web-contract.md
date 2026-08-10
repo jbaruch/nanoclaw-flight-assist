@@ -41,6 +41,7 @@ open. `recommend_alert` already accounts for this.
 ## Errors name a fault the agent cannot re-derive
 
 - `unreachable` — the service is down or `EXPERTFLYER_API_URL` is wrong.
+- `tls` — the service responded; its certificate chain failed verification.
 - `auth` — the service could not authenticate. It retries a login itself before
   reporting, so this means its credentials need attention.
 - `blocked` — ExpertFlyer's bot wall. Never retry in a loop.
