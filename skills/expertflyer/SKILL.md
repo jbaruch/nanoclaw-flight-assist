@@ -75,7 +75,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 `--held` is the seat currently assigned. `--held-cabin` is the cabin it is in. `--held-position` is `window`, `aisle` or `middle`; omit it and the column is read off the open seats in the same cabin. `--scan-up` sets how many cabins above the held one to include — the default and its cost are in `skills/expertflyer/scripts/expertflyer.py`.
 
-Get the held seat from byAir before calling this. It lives on the flight's booking info as `seat_number` and `seat_type`, written by `byair_update_booking_info`. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
+Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
 Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_upgrade`, `alert_recommended`, `cabins_scanned`, `cabins_absent` and `cabins_unscanned`.
 
