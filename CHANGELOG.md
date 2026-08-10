@@ -8,7 +8,11 @@ Both found on the first live run against the deployed service, and both let `ass
 
 `--held-cabin` was taken on faith. The cabin decides the ladder rung and the exit-row layout, so a wrong one poisons every part of the verdict downstream — and nothing checked it. On DL2957 seat 21F was assessed as Comfort+ while row 21 sits in the Main Cabin, an exit row that reclines; the sweep scanned Comfort+ and Premium Select and never looked at the cabin the seat is actually in.
 
-The held seat is occupied, so it never appears in a response, but its row can — under another passenger's seat in the same row. A row seen in a scanned cabin other than the one named, and nowhere in the one named, now returns `held_cabin_mismatch` naming where the row was actually found. The guard needs the real cabin to be in the sweep to fire, so it is a check on the sweep's own observations rather than a general cabin resolver.
+The held seat is occupied, so it never appears in a response, but its row can — under another passenger's seat in the same row. A row seen in a cabin other than the one named, and nowhere in the one named, now returns `held_cabin_mismatch` naming where the row was actually found.
+
+The sweep only reads up the ladder, so the cabin a seat is mistaken for is the one cabin it never looks at: Comfort+ claimed while sitting in Main, one rung below. When the held cabin cannot corroborate the row itself, `assess` probes one rung down. That request sits outside `--scan-up` — it corroborates the cabin rather than widening the evidence base — and it runs only on the uncorroborated case, so the ordinary path costs nothing extra. A probe that errors leaves the cabin unconfirmed rather than turning a good answer into an error.
+
+Both cabins being sold out defeats it: neither can show the row. The service holds the answer already — it parses every seat cell, sold out or not, which is how `exit_rows` covers an occupied exit row — so the durable fix is a cabin row list from the service (jbaruch/expertflyer-api#1).
 
 ## 0.2.106 — 2026-08-10
 

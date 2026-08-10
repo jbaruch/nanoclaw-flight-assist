@@ -168,6 +168,11 @@ VERDICT_NOTHING_OPEN = "nothing_open"
 VERDICT_CABIN_MISMATCH = "held_cabin_mismatch"
 
 
+def _has_row(response: dict, row: int) -> bool:
+    """Whether any bookable seat in this cabin's response sits in `row`."""
+    return any(int(seat.get("row", -1)) == row for seat in response.get("seats", []))
+
+
 def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_rows) -> dict:
     """The seat already occupied, shaped so it can be ranked against open ones.
 
@@ -397,6 +402,7 @@ def _assess(args) -> dict:
         scanned[held_cabin].get("exit_rows"),
     )
     open_seats = [seat for response in scanned.values() for seat in response.get("seats", [])]
+    probed: dict[str, dict] = {}
     common = {
         "flight": scanned[held_cabin].get("flight"),
         "route": scanned[held_cabin].get("route"),
@@ -408,6 +414,44 @@ def _assess(args) -> dict:
         "cabins_unscanned": seat_quality.cabins_above(cabins[0]),
         "seats_compared": len(open_seats),
     }
+
+    # The held seat is occupied and never appears in a response. Its row can
+    # still show up — under another passenger's seat in the same row — and when
+    # that row is only ever seen in a DIFFERENT cabin, the cabin the operator
+    # named is wrong, and every rung, layout and verdict downstream is too.
+    #
+    # The sweep only looks UP the ladder, so the cabin a seat is mistaken for
+    # is usually the one cabin it never reads: the operator says Comfort+ while
+    # sitting in Main, one rung below. Probing down costs one request, and only
+    # when the held cabin failed to corroborate the row itself.
+    below = seat_quality.cabin_below(held_cabin)
+    if below is not None and below not in scanned and not _has_row(scanned[held_cabin], row):
+        probe = _seats_in_cabin(args, below, "any")
+        # A failed probe is not a verdict. The sweep proper already succeeded,
+        # so a corroboration request that could not run leaves the cabin
+        # unconfirmed rather than turning a good answer into an error.
+        if "error" not in probe and probe.get("cabin_present") is not False:
+            probed[below] = probe
+
+    elsewhere = sorted(
+        code
+        for code, response in {**scanned, **probed}.items()
+        if code != held_cabin and _has_row(response, row)
+    )
+    if elsewhere and not _has_row(scanned[held_cabin], row):
+        return {
+            **common,
+            "verdict": VERDICT_CABIN_MISMATCH,
+            "held": held,
+            "cabins_probed": sorted(probed),
+            "detail": (
+                f"seat {args.held!r} was assessed as a {held_cabin} seat, but row {row} shows up "
+                f"in {', '.join(elsewhere)} and nowhere in {held_cabin} — so the seat is very "
+                f"likely in {elsewhere[0]}, not {held_cabin}. Re-run with the right --held-cabin; "
+                "the cabin decides the ladder rung and the exit-row layout, so every part of the "
+                "verdict depends on it."
+            ),
+        }
 
     # A sweep that saw nothing has nothing to compare. `optimal` off an empty
     # evidence base is true the way "no counterexample was found" is true after
@@ -422,33 +466,6 @@ def _assess(args) -> dict:
                 f"compared against seat {args.held!r} — there is no seat to move to, better or "
                 "worse. Widen the sweep with --scan-up, or check the cabin the operator flies: a "
                 f"sold-out {held_cabin} and a seat that is not in {held_cabin} look identical here."
-            ),
-        }
-
-    # The held seat is occupied and never appears in a response. Its row can
-    # still show up — under another passenger's seat in the same row — and when
-    # that row is only ever seen in a DIFFERENT cabin, the cabin the operator
-    # named is wrong, and every rung, layout and verdict downstream is too.
-    elsewhere = sorted(
-        {
-            code
-            for code, response in scanned.items()
-            if code != held_cabin
-            and any(int(s.get("row", -1)) == row for s in response.get("seats", []))
-        }
-    )
-    in_held_cabin = any(int(s.get("row", -1)) == row for s in scanned[held_cabin].get("seats", []))
-    if elsewhere and not in_held_cabin:
-        return {
-            **common,
-            "verdict": VERDICT_CABIN_MISMATCH,
-            "held": held,
-            "detail": (
-                f"seat {args.held!r} was assessed as a {held_cabin} seat, but row {row} shows up "
-                f"in {', '.join(elsewhere)} and nowhere in {held_cabin} — so the seat is very "
-                f"likely in {elsewhere[0]}, not {held_cabin}. Re-run with the right --held-cabin; "
-                "the cabin decides the ladder rung and the exit-row layout, so every part of the "
-                "verdict depends on it."
             ),
         }
     if held["position"] is None:

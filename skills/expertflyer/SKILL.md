@@ -114,11 +114,12 @@ Never report `optimal` as "nothing better exists". The sweep reads `cabins_scann
 - Offer to widen the sweep with `--scan-up`.
 - Check the cabin: a sold-out cabin and a seat that is not in that cabin look identical here.
 
-**`held_cabin_mismatch`** — the held seat's row appears in another scanned cabin and nowhere in the one it was assessed as.
+**`held_cabin_mismatch`** — the held seat's row appears in another cabin and nowhere in the one it was assessed as.
 
 - Relay `detail`. It names the cabin the row was actually seen in.
 - Confirm the cabin with the operator.
 - Re-run with the corrected `--held-cabin`.
+- `cabins_probed` names any cabin read below the sweep to corroborate the row.
 
 **`error`** — go to Step 6.
 

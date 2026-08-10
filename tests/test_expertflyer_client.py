@@ -710,7 +710,14 @@ def test_a_better_cabin_is_reported_as_the_upgrade(cabins):
 
 def test_a_comfort_plus_window_never_upgrades_the_first_seat_held(cabins):
     """1A on DL2714, with Comfort+ open further back. The ladder decides."""
-    cabins["F"] = _cabin("F", [{"label": "3C", "row": 3, "column": "C", "position": "aisle"}])
+    cabins["F"] = _cabin(
+        "F",
+        [
+            {"label": "3C", "row": 3, "column": "C", "position": "aisle"},
+            # Row 1 seen in F corroborates the held cabin, so no downward probe.
+            {"label": "1C", "row": 1, "column": "C", "position": "aisle"},
+        ],
+    )
     out = client.run(
         client.parse_args(
             [
@@ -842,7 +849,9 @@ def test_an_unknown_held_cabin_never_reaches_the_service(cabins):
 
 
 def test_scan_width_controls_how_many_cabins_are_requested(cabins):
-    cabins["W"] = _cabin("W", [{"label": "40B", "row": 40, "column": "B", "position": "middle"}])
+    # Row 21 seen in W corroborates the held cabin, so the width is the only
+    # thing deciding how many requests go out.
+    cabins["W"] = _cabin("W", [{"label": "21B", "row": 21, "column": "B", "position": "middle"}])
     out = _assess(held="21F", held_position="window", scan_up=0)
     assert cabins["_asked"] == ["W"]
     assert out["cabins_scanned"] == ["W"]
@@ -984,8 +993,9 @@ def test_one_open_seat_is_evidence_enough_to_answer(cabins):
 
 def test_a_row_seen_only_in_another_cabin_is_a_mismatch(cabins):
     """The live DL2957 case: 21F called Comfort+, while row 21 sits in Main.
-    The cabin decides the ladder rung and the exit-row layout, so a wrong one
-    poisons every part of the verdict."""
+    The sweep only looks up, so Main is the one cabin it never reads — and the
+    probe one rung down is what makes the mismatch visible at all."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
     cabins["Y"] = _cabin(
         "Y",
         [
@@ -994,7 +1004,6 @@ def test_a_row_seen_only_in_another_cabin_is_a_mismatch(cabins):
         ],
         exit_rows=[19, 20, 21],
     )
-    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
     out = client.run(
         client.parse_args(
             [
@@ -1016,9 +1025,13 @@ def test_a_row_seen_only_in_another_cabin_is_a_mismatch(cabins):
             ]
         )
     )
-    # W alone is scanned, so the mismatch is invisible — the guard needs the
-    # other cabin in the sweep to fire at all.
-    assert out["verdict"] == client.VERDICT_UPGRADE
+    assert out["verdict"] == client.VERDICT_CABIN_MISMATCH
+    assert "Y" in out["detail"]
+    assert out["cabins_probed"] == ["Y"]
+    assert "upgrades" not in out
+    # The probe sits outside --scan-up: it corroborates the cabin rather than
+    # widening the evidence base.
+    assert cabins["_asked"] == ["W", "Y"]
 
 
 def test_the_mismatch_fires_when_the_other_cabin_is_in_the_sweep(cabins):
