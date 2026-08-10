@@ -439,7 +439,7 @@ def test_an_unknown_cabin_raises_rather_than_scoring_as_main():
 
 
 def test_an_unknown_cabin_names_the_seat_it_came_from():
-    """Step 5 relays `detail` and promises it names the seat, so a cabin fault
+    """Step 6 relays `detail` and promises it names the seat, so a cabin fault
     has to carry the label too — `cabin_code` alone does not know it."""
     with pytest.raises(sq.SeatQualityError, match="2A"):
         sq.seat_cabin({"label": "2A", "row": 2, "position": "window", "cabin": "P"})
@@ -451,3 +451,98 @@ def test_a_seat_cabin_resolves_to_the_service_code():
     """Prose on the seat normalises, so ranking compares codes throughout."""
     assert sq.seat_cabin({"label": "2A", "cabin": "Delta One"}) == C
     assert sq.seat_cabin({"label": "2A"}, "premium select") == A
+
+
+# --- the cabin sweep and the held seat ---------------------------------------
+
+
+def test_the_sweep_walks_up_the_ladder_from_the_held_cabin():
+    """A check that reads only the occupied cabin cannot see the Comfort+ seat
+    that opened while the operator sits in Main."""
+    assert sq.cabins_at_or_above(Y, 1) == [W, Y]
+    assert sq.cabins_at_or_above(Y, 0) == [Y]
+    assert sq.cabins_at_or_above(W, 2) == [C, A, W]
+
+
+def test_the_sweep_stops_at_the_top_of_the_ladder():
+    """Nothing sits above First, however many rungs are asked for."""
+    assert sq.cabins_at_or_above(F, 3) == [F]
+    assert sq.cabins_at_or_above(C, 5) == [F, C]
+
+
+def test_the_sweep_rejects_a_negative_width():
+    with pytest.raises(sq.SeatQualityError):
+        sq.cabins_at_or_above(Y, -1)
+
+
+def test_a_seat_designator_splits_into_row_and_column():
+    assert sq.parse_seat_label("21F") == (21, "F")
+    assert sq.parse_seat_label("1A") == (1, "A")
+    assert sq.parse_seat_label(" 10c ") == (10, "C")
+
+
+def test_something_that_is_not_a_seat_designator_raises():
+    for bad in ("F21", "21", "A", "", "21FF9", "row 21"):
+        with pytest.raises(sq.SeatQualityError):
+            sq.parse_seat_label(bad)
+
+
+def test_row_zero_is_rejected_rather_than_ranked_ahead_of_row_one():
+    """Row 0 parses as a number and sorts ahead of every real row, so a
+    mistyped seat would report the whole aircraft as worse than it."""
+    for bad in ("0A", "00C", "0F"):
+        with pytest.raises(sq.SeatQualityError, match="start at 1"):
+            sq.parse_seat_label(bad)
+    assert sq.parse_seat_label("1A") == (1, "A")
+
+
+def test_the_held_seat_s_position_is_read_off_the_open_seats_beside_it():
+    """The held seat is occupied, so it is never in the service's response.
+    The aircraft still states what column F is, on every open seat."""
+    open_seats = [
+        {"label": "12A", "row": 12, "column": "A", "position": "window"},
+        {"label": "14B", "row": 14, "column": "B", "position": "middle"},
+        {"label": "15F", "row": 15, "column": "F", "position": "window"},
+    ]
+    assert sq.column_positions(open_seats) == {"A": "window", "B": "middle", "F": "window"}
+
+
+def test_a_column_reported_two_ways_is_dropped_rather_than_picked():
+    """Forward rows 2-2 and rear rows 3-3 make one letter both a window and a
+    middle; choosing one decides the operator is in a seat they are not in."""
+    conflicting = [
+        {"label": "2C", "row": 2, "column": "C", "position": "window"},
+        {"label": "20C", "row": 20, "column": "C", "position": "aisle"},
+        {"label": "20A", "row": 20, "column": "A", "position": "window"},
+    ]
+    assert sq.column_positions(conflicting) == {"A": "window"}
+
+
+def test_columns_ignore_seats_with_no_usable_position():
+    unusable = [
+        {"label": "12A", "row": 12, "column": "A", "position": "porthole"},
+        {"label": "12D", "row": 12, "position": "aisle"},
+        {"label": "12C", "row": 12, "column": "c", "position": "aisle"},
+    ]
+    assert sq.column_positions(unusable) == {"C": "aisle"}
+
+
+def test_anything_worth_taking_beats_a_middle_already_held():
+    """Rule 1 is absolute, so a held middle has no position score to sort by.
+    It needs none: every acceptable seat beats it, however far back."""
+    held_middle = {"label": "13B", "row": 13, "position": "middle", "cabin": W}
+    assert sq.is_upgrade({"label": "20C", "row": 20, "position": "aisle", "cabin": W}, held_middle)
+    # Worse cabin, worse row, still an upgrade — a middle is never taken.
+    assert sq.is_upgrade({"label": "40C", "row": 40, "position": "aisle", "cabin": Y}, held_middle)
+    # Another middle is not.
+    assert (
+        sq.is_upgrade({"label": "40B", "row": 40, "position": "middle", "cabin": Y}, held_middle)
+        is False
+    )
+
+
+def test_the_cabins_a_sweep_stopped_short_of_are_nameable():
+    """A verdict of 'nothing open beats it' is only true of what was read."""
+    assert sq.cabins_above(W) == [F, C, A]
+    assert sq.cabins_above(F) == []
+    assert sq.cabins_above(Y) == [F, C, A, W]

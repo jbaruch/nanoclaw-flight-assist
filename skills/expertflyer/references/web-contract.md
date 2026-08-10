@@ -50,4 +50,4 @@ Upstream returns 403 for both a bot-walled request and an unauthenticated one,
 so only the service can tell `auth` from `blocked`. Relay its verdict.
 
 Those four are the service's. `unrankable` is the client's own and means the
-service answered fine — see SKILL.md Step 5 for its flow.
+service answered fine — see SKILL.md Step 6 (Diagnose access) for its flow.
