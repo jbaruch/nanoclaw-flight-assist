@@ -21,6 +21,11 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import seat_quality  # noqa: E402
 
 URL_ENV = "EXPERTFLYER_API_URL"
 TOKEN_ENV = "EXPERTFLYER_API_TOKEN"
@@ -77,6 +82,26 @@ def _request(method: str, path: str, params: dict | None = None, body: dict | No
         }
 
 
+def _rank(result: dict) -> dict:
+    """Order the service's bookable seats by the operator's preferences.
+
+    The service reports what each seat IS; ranking decides what it is WORTH,
+    which is why it happens here rather than upstream. `matching` is the
+    service's own criteria filter and is left untouched.
+    """
+    if "error" in result or not isinstance(result.get("seats"), list):
+        return result
+    cabin = result.get("cabin")
+    ranked = seat_quality.rank_seats(result["seats"], cabin)
+    result["ranked"] = [{**s, "why": seat_quality.describe(s, cabin)} for s in ranked]
+    best = ranked[0] if ranked else None
+    result["best"] = seat_quality.describe(best, cabin) if best else None
+    # Every open seat may still be unacceptable — a cabin of middles ranks to
+    # nothing even though `available_total` is non-zero.
+    result["acceptable_total"] = len(ranked)
+    return result
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Query the ExpertFlyer API service.")
     sub = p.add_subparsers(dest="action", required=True)
@@ -121,7 +146,7 @@ def parse_args(argv=None):
 
 def run(args) -> dict:
     if args.action == "seats":
-        return _request(
+        result = _request(
             "GET",
             "/seats",
             {
@@ -134,6 +159,7 @@ def run(args) -> dict:
                 "destination": args.destination,
             },
         )
+        return _rank(result)
     if args.action == "fare-class":
         return _request(
             "GET",

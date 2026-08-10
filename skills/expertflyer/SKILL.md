@@ -41,7 +41,13 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py seat
 
 `--cabin` takes the cabin the operator named — `premium economy`, `comfort+`, `business`, `first`, `economy` — or a bare code. Premium economy is Delta's **Premium Select** (`A`) and is a different cabin from Comfort+ (`W`); the service rejects an unrecognised cabin rather than falling back to economy. `--want` accepts `non-middle` (aisle and window), `aisle,window`, `middle`, or `any`. `--origin`/`--destination` are optional — omit them and the route is resolved from the flight number.
 
-Outputs `matching` (free seats meeting the criteria), `available_total`, `seats_in_cabin`, `cabin_present`, `recommend_alert`.
+Outputs `matching` (the service's own criteria filter), `available_total`, `seats_in_cabin`, `cabin_present`, `recommend_alert`, plus three fields the client adds by ranking the response against the operator's seat preferences:
+
+- `ranked` — bookable seats, best first, each with a `why` such as `12A (window)`
+- `best` — the top seat's description, or `null` when nothing is worth taking
+- `acceptable_total` — how many seats are actually worth taking
+
+`acceptable_total` can be `0` while `available_total` is not: a middle is never offered, so a cabin whose only free seats are middles ranks to nothing. Report `best` when it is set; when it is `null` say the cabin has nothing worth moving to rather than listing the middles. Ranking rules live in `scripts/seat_quality.py`.
 
 When `matching` is non-empty, tell the operator which seat is open and **do not** create an alert. When `cabin_present` is false the aircraft has no such cabin — say that; do not offer an alert for a cabin that can never open. Otherwise offer the alert (Step 3).
 
