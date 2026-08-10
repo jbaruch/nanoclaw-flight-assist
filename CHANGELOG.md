@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.106 — 2026-08-10
+
 ### Fixed — the byAir seat fields are named differently on read and on write
 
 Step 3 told the agent the held seat lives on byAir as `seat_number` / `seat_type`. Those are the parameter names `byair_update_booking_info` takes on write; `byair_get_flight` returns the seat as `seatNumber` / `seatType`. An agent reading the skill and looking for the snake_case keys finds neither, concludes byAir has no seat for the flight, and asks the operator for a seat byAir already holds.
