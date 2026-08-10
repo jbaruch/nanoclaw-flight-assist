@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.112 — 2026-08-10
+
 ### Changed — the held seat's cabin is resolved, not asked for
 
 byAir stores the seat and no cabin the assessment can use. Its `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the distinction the whole assessment turns on, and the one that had seat 21F judged against the wrong cabin.
