@@ -12,6 +12,8 @@ Absence of the held seat is a refusal, not a fallback. `no_held_seat` and `held_
 
 The held seat is never in the service's response — it is occupied, by the operator — so it is reconstructed. Row and column come from the designator, exit-row membership from the cabin's layout, and position from `--held-position` when stated or from the columns of the open seats beside it when not. `position_source` records which. A column two open seats disagree about is dropped rather than resolved: a cabin running 2-2 forward and 3-3 behind makes one letter both a window and a middle, and picking one decides the operator is in a seat they are not in.
 
+A held middle is assessed rather than crashing. `--held-position middle` is a supported input, and `is_upgrade()` ranked the held seat through `seat_sort_key()`, which has no score for a position rule 1 excludes outright — so the operator most worth answering got a `KeyError`. A middle needs no score: every seat worth taking beats it, including one further back in a worse cabin.
+
 Row 0 is rejected rather than parsed. It sorts ahead of row 1, so a mistyped seat would rank as the furthest-forward seat on the aircraft and report every real seat as worse than it — a confident `optimal` built on a seat that does not exist.
 
 A cabin that fails to load aborts the assessment. That cabin could be holding the upgrade, so a partial sweep must never report that nothing better is open.

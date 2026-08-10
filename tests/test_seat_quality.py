@@ -525,3 +525,17 @@ def test_columns_ignore_seats_with_no_usable_position():
         {"label": "12C", "row": 12, "column": "c", "position": "aisle"},
     ]
     assert sq.column_positions(unusable) == {"C": "aisle"}
+
+
+def test_anything_worth_taking_beats_a_middle_already_held():
+    """Rule 1 is absolute, so a held middle has no position score to sort by.
+    It needs none: every acceptable seat beats it, however far back."""
+    held_middle = {"label": "13B", "row": 13, "position": "middle", "cabin": W}
+    assert sq.is_upgrade({"label": "20C", "row": 20, "position": "aisle", "cabin": W}, held_middle)
+    # Worse cabin, worse row, still an upgrade — a middle is never taken.
+    assert sq.is_upgrade({"label": "40C", "row": 40, "position": "aisle", "cabin": Y}, held_middle)
+    # Another middle is not.
+    assert (
+        sq.is_upgrade({"label": "40B", "row": 40, "position": "middle", "cabin": Y}, held_middle)
+        is False
+    )

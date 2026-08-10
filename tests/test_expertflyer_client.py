@@ -857,3 +857,22 @@ def test_an_unanswerable_position_still_names_the_seat_and_cabin(cabins):
     assert held["cabin"] == "W"
     assert held["position"] is None
     assert held["position_source"] is None
+
+
+def test_a_held_middle_is_assessed_rather_than_crashing(cabins):
+    """`--held-position middle` is a supported input, and the operator stuck in
+    one is the case most worth answering."""
+    cabins["W"] = _cabin("W", [{"label": "20C", "row": 20, "column": "C", "position": "aisle"}])
+    out = _assess(held="13B", held_position="middle")
+    assert out["verdict"] == client.VERDICT_UPGRADE
+    assert out["best_upgrade"] == "20C (aisle)"
+    assert out["held"]["position"] == "middle"
+
+
+def test_a_held_middle_with_only_middles_open_stays_optimal(cabins):
+    """Nothing worth taking is open, so there is nothing to move to — the
+    verdict is about the open seats, not an endorsement of the middle."""
+    cabins["W"] = _cabin("W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}])
+    out = _assess(held="13B", held_position="middle")
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert out["alert_recommended"] is True

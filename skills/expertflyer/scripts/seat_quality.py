@@ -372,6 +372,11 @@ def is_upgrade(
         return False
     if current is None:
         return True
+    if not is_acceptable(current):
+        # The operator is in a middle. Rule 1 is absolute, so a middle has no
+        # position score to sort by — and needs none: every seat worth taking
+        # beats it, including one that would lose on cabin and on row.
+        return True
     pair = [candidate, current]
     tiers = exit_tiers(pair, cabin_exit_rows)
     # Each seat resolves its OWN cabin: the candidate may be Comfort+ while the
