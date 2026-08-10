@@ -77,9 +77,15 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Every response carries `verdict`, `held` (with `why` and `position_source`), `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`.
+Three shapes come back without an assessment, and none of them carries `verdict` or `held`:
 
-`optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` instead and carries none of those three. Their absence is the contract, not a malformed response — a verdict that judged nothing has no upgrade list to report.
+1. `error: "bad_request"` with `detail` — an unusable argument, such as an unrecognised cabin or a seat that is not a designator. `cabins_absent` rides along when the aircraft has no such cabin.
+2. `error` with `detail`, `cabin_failed` and `cabins_requested` — a cabin did not load. Go to Step 6.
+3. `verdict: "no_held_seat"` with `detail` — nothing was requested, so there is nothing else to report.
+
+Every assessed response carries `verdict`, `held` (with `why` and `position_source`), `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`.
+
+`optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` and carries none of those three. Their absence is the contract, not a malformed response.
 
 `cabins_probed` and `cabin_probe_failed` appear only when a cabin below the sweep was read to corroborate the held seat's row.
 

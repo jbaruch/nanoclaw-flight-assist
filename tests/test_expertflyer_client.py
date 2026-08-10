@@ -1161,3 +1161,44 @@ def test_a_cabin_nothing_could_confirm_is_neither_true_nor_false(cabins):
     )
     assert out["held_cabin_corroborated"] is None
     assert out["verdict"] == client.VERDICT_UPGRADE
+
+
+def test_the_pre_assessment_shapes_carry_no_verdict_or_held(cabins):
+    """Step 3 documents three responses that precede any assessment. An agent
+    reading them as malformed is the failure this pins."""
+    bad_cabin = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "sky club",
+                "--held",
+                "21F",
+            ]
+        )
+    )
+    assert bad_cabin["error"] == "bad_request"
+    assert "verdict" not in bad_cabin and "held" not in bad_cabin
+
+    cabins["W"] = {"error": "blocked", "detail": "bot wall"}
+    failed = _assess(held="21F", held_position="window")
+    assert failed["cabin_failed"] == "A" or failed["cabin_failed"] == "W"
+    assert "verdict" not in failed and "held" not in failed
+
+    none_held = _assess()
+    assert none_held["verdict"] == client.VERDICT_NO_HELD_SEAT
+    assert "held" not in none_held and "cabins_scanned" not in none_held
+
+
+def test_the_aircraft_lacking_the_held_cabin_reports_which_were_absent(cabins):
+    cabins["W"] = _cabin("W", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["error"] == "bad_request"
+    assert "W" in out["cabins_absent"] or out["cabins_absent"] == ["A", "W"]
+    assert "verdict" not in out

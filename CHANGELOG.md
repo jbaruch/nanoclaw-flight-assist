@@ -14,7 +14,7 @@ The sweep only reads up the ladder, so the cabin a seat is mistaken for is the o
 
 A probe that fails is reported, never swallowed: `cabin_probe_failed` carries the fault and a stderr warning names it, because a caller reading a verdict has to know the cabin behind it went unchecked. `held_cabin_corroborated` states the outcome directly — `true` when the row was seen in the cabin claimed, `false` when seen only elsewhere, `null` when nothing could show it.
 
-The output contract is now stated per verdict rather than as one flat list. `optimal` and `upgrade` carry `upgrades`, `best_upgrade` and `alert_recommended`; every other verdict carries `detail` and none of those three. The absence is the contract — a verdict that judged nothing has no upgrade list — and saying so keeps an agent from reading a refusal as a malformed response.
+The output contract is now stated per response shape rather than as one flat list. Three responses precede any assessment and carry neither `verdict` nor `held`: an unusable argument, a cabin that failed to load, and `no_held_seat`. Naming them keeps an agent from reading a valid error as a malformed response. `optimal` and `upgrade` carry `upgrades`, `best_upgrade` and `alert_recommended`; every other verdict carries `detail` and none of those three. The absence is the contract — a verdict that judged nothing has no upgrade list — and saying so keeps an agent from reading a refusal as a malformed response.
 
 Both cabins being sold out defeats it: neither can show the row. The service holds the answer already — it parses every seat cell, sold out or not, which is how `exit_rows` covers an occupied exit row — so the durable fix is a cabin row list from the service (jbaruch/expertflyer-api#20).
 
