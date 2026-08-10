@@ -679,35 +679,6 @@ def test_a_window_stays_optimal_when_only_middles_are_open(cabins):
     assert out["cabins_absent"] == ["A"]
 
 
-def test_a_better_cabin_is_reported_as_the_upgrade(cabins):
-    """The case a single-cabin check structurally cannot see."""
-    cabins["Y"] = _cabin("Y", [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}])
-    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
-    out = client.run(
-        client.parse_args(
-            [
-                "assess",
-                "--airline",
-                "DL",
-                "--flight",
-                "2957",
-                "--date",
-                "2024-03-05",
-                "--held-cabin",
-                "Y",
-                "--held",
-                "30A",
-                "--held-position",
-                "window",
-            ]
-        )
-    )
-    assert out["verdict"] == client.VERDICT_UPGRADE
-    assert out["best_upgrade"] == "12A (window)"
-    assert out["alert_recommended"] is False
-    assert out["cabins_scanned"] == ["W", "Y"]
-
-
 def test_a_comfort_plus_window_never_upgrades_the_first_seat_held(cabins):
     """1A on DL2714, with Comfort+ open further back. The ladder decides."""
     cabins["F"] = _cabin(
@@ -1201,12 +1172,155 @@ def test_the_true_reason_per_cabin_is_reported(cabins):
     assert out["alert_recommended"] is True
 
 
-def test_a_comfort_plus_seat_worth_taking_still_beats_a_main_exit_row(cabins):
-    """The counterpart: the moment W has an acceptable seat, it wins. Any
-    report claiming the exit row outranks the cabin is wrong."""
-    cabins["Y"] = _cabin_with_rows("Y", [], list(range(16, 33)), exit_rows=[19, 20, 21])
-    cabins["W"] = _cabin_with_rows(
-        "W", [{"label": "14A", "row": 14, "column": "A", "position": "window"}], list(range(10, 21))
+def test_a_better_cabin_is_an_opening_not_a_seat_change(cabins):
+    """A seat in a cabin the operator is not ticketed into cannot be selected
+    in the app — it is a fare change or an upgrade clearance. Reporting it as
+    an upgrade tells them to go take a seat that is not theirs to take."""
+    cabins["Y"] = _cabin("Y", [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}])
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "30A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert out["upgrades"] == []
+    assert out["best_upgrade"] is None
+    assert [s["why"] for s in out["cabin_openings"]] == ["12A (window)"]
+
+
+def test_a_same_cabin_seat_is_still_a_real_upgrade(cabins):
+    """The counterpart: inside the held cabin, an open seat is selectable."""
+    cabins["Y"] = _cabin(
+        "Y",
+        [
+            {"label": "12A", "row": 12, "column": "A", "position": "window"},
+            {"label": "30C", "row": 30, "column": "C", "position": "aisle"},
+        ],
+    )
+    cabins["W"] = _cabin("W", [])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "30A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_UPGRADE
+    assert out["best_upgrade"] == "12A (window)"
+    assert out["cabin_openings"] == []
+
+
+def test_the_alert_covers_one_rung_up_however_wide_the_sweep(cabins):
+    """The live complaint: a sweep widened to First offered an alert on First.
+    A wide sweep sees what exists; it does not widen what is worth watching."""
+    for code in ("Y", "W", "A", "C", "F"):
+        cabins[code] = _cabin(code, [])
+    # A middle only: nothing worth taking anywhere, so every watchable cabin
+    # stays watchable and the rung bound is the only thing narrowing the list.
+    cabins["Y"] = _cabin("Y", [{"label": "30B", "row": 30, "column": "B", "position": "middle"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "30A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "4",
+            ]
+        )
+    )
+    assert out["cabins_scanned"] == ["F", "C", "A", "W", "Y"]
+    assert out["alert_cabins"] == ["W", "Y"]
+
+
+def test_the_alert_never_names_a_cabin_the_aircraft_lacks(cabins):
+    cabins["W"] = _cabin("W", [{"label": "12B", "row": 12, "column": "B", "position": "middle"}])
+    cabins["A"] = _cabin("A", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["cabins_absent"] == ["A"]
+    assert out["alert_cabins"] == ["W"]
+
+
+def test_a_cabin_already_holding_a_seat_is_not_worth_watching(cabins):
+    """Check first, alert only if absent. A watch on a cabin with a seat
+    already open fires the moment it is created."""
+    # Main has open seats, none better than the held exit row. Comfort+ empty.
+    cabins["Y"] = _cabin(
+        "Y",
+        [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}],
+        exit_rows=[21],
+    )
+    cabins["W"] = _cabin("W", [])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    # Y already has a non-middle open, so a Y watch would fire immediately.
+    assert out["acceptable_by_cabin"]["Y"] == 1
+    assert out["alert_cabins"] == ["W"]
+    assert out["alert_recommended"] is True
+
+
+def test_nothing_is_recommended_when_every_watchable_cabin_has_a_seat(cabins):
+    cabins["Y"] = _cabin(
+        "Y", [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}], exit_rows=[21]
+    )
+    cabins["W"] = _cabin("W", [{"label": "12B", "row": 12, "column": "B", "position": "middle"}])
+    cabins["W"]["seats"].append(
+        {"label": "14D", "row": 14, "column": "D", "position": "aisle", "cabin": "W"}
     )
     out = client.run(
         client.parse_args(
@@ -1227,6 +1341,5 @@ def test_a_comfort_plus_seat_worth_taking_still_beats_a_main_exit_row(cabins):
             ]
         )
     )
-    assert out["verdict"] == client.VERDICT_UPGRADE
-    assert out["best_upgrade"] == "14A (window)"
-    assert out["acceptable_by_cabin"]["W"] == 1
+    assert out["alert_cabins"] == []
+    assert out["alert_recommended"] is False

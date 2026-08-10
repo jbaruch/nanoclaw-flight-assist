@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.2.110 — 2026-08-10
+### Fixed — a seat in a better cabin was reported as one to go and take
+
+Found on the second live trip sweep, which told the operator their Comfort+ seat was beaten by 2D in First. It is not a seat they can select: moving cabins is a fare change or an upgrade clearance, and the airline's app offers no button for it. The reply was actionable-sounding and unactionable.
+
+`is_upgrade` ranks a better cabin above the held seat, which is right — that is the ladder #254 fixed. What was wrong is `assess` presenting the result as an upgrade to take. `upgrades` now holds seats in the held cabin only, which are the ones the operator can select; a better cabin's seats go to `cabin_openings`, and the skill says explicitly that taking one is Step 1's fare-class question rather than a seat change.
+
+`optimal` follows from that: nothing the operator can select beats the held seat. A Comfort+ window opening while they sit in Main is still reported, as an opening rather than as a seat to go and take.
+
+### Fixed — the alert offer followed the sweep instead of the operator
+
+The same sweep offered an alert on First. Step 3 said to offer on `cabins_scanned`, and the sweep had been widened with `--scan-up`, so the offer widened with it — a watch on a cabin the operator does not move into.
+
+`alert_cabins` is now its own answer: the held cabin and one rung up, whatever the sweep read. Widening `--scan-up` sees further and changes nothing about what is worth watching.
+
+It also honours the skill's founding rule. Check first, alert only if absent — a cabin already holding a seat worth taking has nothing to wait for, and a watch on it fires the moment it is created. Those cabins drop out, so on a flight where the held cabin has seats and Comfort+ is sold out, the offer is Comfort+ alone. That is what the operator asked for, arrived at from the check-first rule rather than a special case.
 
 ### Fixed — the trip report explained the verdict wrongly, and never offered the alert
 

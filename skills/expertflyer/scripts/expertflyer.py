@@ -160,6 +160,11 @@ def _rank(result: dict) -> dict:
 # sits in Main.
 DEFAULT_SCAN_RUNGS = 1
 
+# How far up the ladder an alert offer reaches from the held cabin. A wide
+# sweep sees what exists; it does not widen what the operator would actually
+# move into, and an alert on a cabin they cannot buy into is noise.
+ALERT_RUNGS = 1
+
 VERDICT_OPTIMAL = "optimal"
 VERDICT_UPGRADE = "upgrade"
 VERDICT_NO_HELD_SEAT = "no_held_seat"
@@ -514,25 +519,57 @@ def _assess(args) -> dict:
     # Exit rows are numbered on the aircraft, not per cabin, so recline is
     # derived from every layout the sweep saw rather than one cabin's slice.
     try:
-        upgrades = [
+        beats_held = [
             seat for seat in open_seats if seat_quality.is_upgrade(seat, held, None, layout or None)
         ]
-        ranked = seat_quality.rank_seats(upgrades, None, layout or None)
-        tiers = seat_quality.exit_tiers(upgrades, layout or None)
-        described = [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
+        tiers = seat_quality.exit_tiers(beats_held, layout or None)
+
+        def describe_all(seats):
+            ranked = seat_quality.rank_seats(seats, None, layout or None)
+            return [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
+
+        # A seat in the cabin the operator is ticketed into can be selected in
+        # the airline's app. One in a better cabin cannot: it is a fare change
+        # or an upgrade clearance, which is Step 1's question, not a seat
+        # change. Reporting both as "upgrades" tells the operator to go take a
+        # seat that is not theirs to take.
+        described = describe_all(
+            [s for s in beats_held if seat_quality.seat_cabin(s, None) == held_cabin]
+        )
+        openings = describe_all(
+            [s for s in beats_held if seat_quality.seat_cabin(s, None) != held_cabin]
+        )
     except seat_quality.SeatQualityError as exc:
         return {**common, "error": "unrankable", "detail": str(exc), "held": held}
 
+    # An alert is worth setting on the cabins the operator would actually move
+    # into. A wide sweep is for seeing what exists; it does not widen what is
+    # worth watching.
+    #
+    # Check first, alert only if absent: a cabin already holding a seat worth
+    # taking has nothing to wait for, and a watch on it fires the moment it is
+    # created. Only a cabin with nothing acceptable open is worth watching.
+    watchable = [
+        cabin
+        for cabin in seat_quality.cabins_at_or_above(held_cabin, ALERT_RUNGS)
+        if cabin in scanned and common["acceptable_by_cabin"].get(cabin, 0) == 0
+    ]
+
     return {
         **common,
-        # `optimal` is scoped to `cabins_scanned`, never to the whole aircraft.
+        # `optimal` is scoped to `cabins_scanned`, never to the whole aircraft,
+        # and to seats the operator can select — a better cabin is reported
+        # separately because taking it is a different transaction.
         "verdict": VERDICT_UPGRADE if described else VERDICT_OPTIMAL,
         "held": held,
         "upgrades": described,
         "best_upgrade": described[0]["why"] if described else None,
-        # Nothing open beats the held seat, so watching is the only move left.
-        # A seat worth taking is taken now, not watched.
-        "alert_recommended": not described,
+        "cabin_openings": openings,
+        # Nothing selectable beats the held seat, so watching is the only move
+        # left. A seat worth taking is taken now, not watched — and there has
+        # to be a cabin worth watching.
+        "alert_recommended": not described and bool(watchable),
+        "alert_cabins": sorted(watchable, key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True),
     }
 
 
