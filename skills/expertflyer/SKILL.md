@@ -66,7 +66,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/upcoming-flights.py
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, summary, uid}], "count": N}`, soonest first. Departures inside the next 12 hours are excluded.
+Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, summary, uid}], "count": N}`, soonest first, already filtered to those far enough out to act on. The lead window is a named constant in `skills/expertflyer/scripts/upcoming-flights.py`.
 
 Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origin` and `destination`, with the cabin the operator flies (`comfort+` unless they say otherwise). Apply Step 2's decision rules per flight and report only the flights that need something:
 
@@ -76,7 +76,7 @@ Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origi
 
 Say nothing about a flight whose cabin is absent from the aircraft. Every other flight gets one of the two lines above.
 
-If the service reports the flight is not found on that date, retry once with the previous day.
+The client retries the previous day by itself when the flight is not found on the given date, and reports `date_fallback_applied` when it did. Pass `--no-date-fallback` to suppress that.
 
 Finish here unless the operator accepts an alert.
 

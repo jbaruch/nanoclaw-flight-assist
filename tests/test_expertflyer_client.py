@@ -309,3 +309,93 @@ def test_a_response_without_seats_is_left_alone():
     """Older service versions return only `matching`; do not invent fields."""
     old = {"matching": ["12A"], "available_total": 1}
     assert client._rank(dict(old)) == old
+
+
+# --- the UTC-date fallback lives in the script, not in agent prose -----------
+
+
+def test_previous_day_is_computed_not_string_sliced():
+    assert client._previous_day("2024-03-01") == "2024-02-29"  # leap year
+    assert client._previous_day("2024-01-01") == "2023-12-31"
+
+
+def test_a_flight_missing_on_the_utc_date_is_retried_on_the_previous_day(monkeypatch):
+    """A late local departure lands on the next UTC day."""
+    calls = []
+
+    def fake(method, path, params=None, body=None):
+        calls.append(params["date"])
+        if params["date"] == "2024-03-07":
+            return {"error": "error", "detail": "could not resolve a route for DL9"}
+        return {"cabin": "W", "seats": [], "available_total": 0}
+
+    monkeypatch.setattr(client, "_request", fake)
+    out = client.run(
+        client.parse_args(
+            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
+        )
+    )
+    assert calls == ["2024-03-07", "2024-03-06"]
+    assert out["date_fallback_applied"] == "2024-03-06"
+
+
+def test_the_fallback_can_be_suppressed(monkeypatch):
+    calls = []
+
+    def fake(method, path, params=None, body=None):
+        calls.append(params["date"])
+        return {"error": "error", "detail": "could not resolve a route for DL9"}
+
+    monkeypatch.setattr(client, "_request", fake)
+    out = client.run(
+        client.parse_args(
+            [
+                "seats",
+                "--airline",
+                "DL",
+                "--flight",
+                "9",
+                "--date",
+                "2024-03-07",
+                "--cabin",
+                "W",
+                "--no-date-fallback",
+            ]
+        )
+    )
+    assert calls == ["2024-03-07"]
+    assert out["error"] == "error"
+
+
+def test_an_unrelated_error_is_not_retried(monkeypatch):
+    """Only an unresolved route suggests the date; auth failures do not."""
+    calls = []
+
+    def fake(method, path, params=None, body=None):
+        calls.append(params["date"])
+        return {"error": "auth", "detail": "session expired"}
+
+    monkeypatch.setattr(client, "_request", fake)
+    client.run(
+        client.parse_args(
+            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
+        )
+    )
+    assert calls == ["2024-03-07"]
+
+
+def test_a_successful_first_try_is_not_retried(monkeypatch):
+    calls = []
+
+    def fake(method, path, params=None, body=None):
+        calls.append(params["date"])
+        return {"cabin": "W", "seats": [], "available_total": 0}
+
+    monkeypatch.setattr(client, "_request", fake)
+    out = client.run(
+        client.parse_args(
+            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
+        )
+    )
+    assert calls == ["2024-03-07"]
+    assert "date_fallback_applied" not in out
