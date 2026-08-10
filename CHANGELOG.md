@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.109 — 2026-08-10
+
 ### Fixed — the seat pass covered every upcoming flight, not the trip asked about
 
 `upcoming-flights.py` had a lower bound and no upper one, so "make sure I have the best seats" was a work list of every flight on the schedule. Today that is 37 flights: at a request per cabin each, against a service that answers `blocked` when its bot wall trips, an hour of browser-driven traffic to answer a question about tomorrow.
