@@ -12,6 +12,8 @@ It is never `false`, and an earlier draft of this change that refused on absence
 
 Disproof needs the cabin's row layout, which the service already parses (that is how `exit_rows` covers a sold-out exit row) and does not report. Filed as jbaruch/expertflyer-api#20.
 
+`held.why` is rendered before the early returns, so every response carrying a held seat describes it — `nothing_open` and `upgrade` alike. Only `held_position_unknown` has no position to render, and the contract says so.
+
 The output contract is now stated per response shape rather than as one flat list. Two responses carry no `verdict` at all — an unusable argument and a cabin that failed to load — and `no_held_seat` carries `verdict` without `held`. Naming them keeps an agent from reading a valid error as a malformed response.
 
 ## 0.2.106 — 2026-08-10

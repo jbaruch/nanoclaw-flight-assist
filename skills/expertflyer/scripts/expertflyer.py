@@ -435,6 +435,18 @@ def _assess(args) -> dict:
     # A sweep that saw nothing has nothing to compare. `optimal` off an empty
     # evidence base is true the way "no counterexample was found" is true after
     # looking in no drawers — and it reads as a comparison that happened.
+    # Rendered before the early returns: a response that carries `held` with a
+    # known position carries its description too. Only an unknown position has
+    # nothing to render, and that shape says so.
+    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
+    if held["position"] is not None:
+        try:
+            held["why"] = seat_quality.describe(
+                held, None, seat_quality.exit_tiers([held], layout or None)
+            )
+        except seat_quality.SeatQualityError as exc:
+            return {**common, "error": "unrankable", "detail": str(exc), "held": held}
+
     if not open_seats:
         return {
             **common,
@@ -462,16 +474,13 @@ def _assess(args) -> dict:
 
     # Exit rows are numbered on the aircraft, not per cabin, so recline is
     # derived from every layout the sweep saw rather than one cabin's slice.
-    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
     try:
         upgrades = [
             seat for seat in open_seats if seat_quality.is_upgrade(seat, held, None, layout or None)
         ]
         ranked = seat_quality.rank_seats(upgrades, None, layout or None)
         tiers = seat_quality.exit_tiers(upgrades, layout or None)
-        held_tiers = seat_quality.exit_tiers([held], layout or None)
         described = [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
-        held["why"] = seat_quality.describe(held, None, held_tiers)
     except seat_quality.SeatQualityError as exc:
         return {**common, "error": "unrankable", "detail": str(exc), "held": held}
 

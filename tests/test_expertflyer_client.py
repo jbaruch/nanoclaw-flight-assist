@@ -1071,3 +1071,20 @@ def test_a_row_seen_elsewhere_is_a_hint_not_a_verdict(cabins):
     assert out["held_cabin_corroborated"] is None
     assert out["row_seen_in"] == ["A"]
     assert out["verdict"] in (client.VERDICT_OPTIMAL, client.VERDICT_UPGRADE)
+
+
+def test_every_shape_carrying_a_held_seat_describes_it(cabins):
+    """Step 3 promises `held.why` on every shape but `held_position_unknown`."""
+    cabins["W"] = _cabin("W", [], present=True)
+    nothing = _assess(held="21F", held_position="window")
+    assert nothing["verdict"] == client.VERDICT_NOTHING_OPEN
+    assert nothing["held"]["why"] == "21F (window)"
+
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    upgrade = _assess(held="21F", held_position="window")
+    assert upgrade["held"]["why"] == "21F (window)"
+
+    cabins["W"] = _cabin("W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}])
+    unknown = _assess(held="21F")
+    assert unknown["verdict"] == client.VERDICT_POSITION_UNKNOWN
+    assert "why" not in unknown["held"]

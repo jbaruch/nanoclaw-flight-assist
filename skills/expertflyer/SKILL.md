@@ -77,22 +77,23 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Three shapes come back without an assessment, and two of them carry no `verdict` at all:
+Responses carrying `error` and `detail` instead of a `verdict`:
 
-1. `error: "bad_request"` with `detail` — an unusable argument, such as an unrecognised cabin or a seat that is not a designator. `cabins_absent` rides along when the aircraft has no such cabin.
-2. `error` with `detail`, `cabin_failed` and `cabins_requested` — a cabin did not load. Go to Step 6.
+1. `bad_request` — an unusable argument, such as an unrecognised cabin or a seat that is not a designator. `cabins_absent` rides along when the aircraft has no such cabin.
+2. `unrankable` — a seat the ranking refused. Step 6 covers it.
+3. any service fault, with `cabin_failed` and `cabins_requested` naming the cabin that did not load. Go to Step 6.
 
-`verdict: "no_held_seat"` is the third. It carries `verdict` and `detail` and no `held`, because nothing was requested.
+`verdict: "no_held_seat"` carries `verdict` and `detail` alone. It has no `held`.
 
-Every assessed response carries `verdict`, `held` (with `why` and `position_source`), `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`.
+Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
 
 `optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` and carries none of those three. Their absence is the contract, not a malformed response.
 
 `cabins_scanned` is the whole evidence base and `seats_compared` is its size. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
 
-`held_cabin_corroborated` is `true` when the held seat's row was seen in the cabin it was assessed as, and `null` otherwise. It is never `false`. `/seats` reports bookable seats, so a row whose every seat is taken is missing from the response while still being in the cabin, and cabins split mid-row so one row number can sit in two of them. Absence is not disproof.
+`held_cabin_corroborated` is `true` when the sweep saw the held seat's row in the cabin it was assessed as, and `null` when it did not. It is never `false`: absence is not disproof. The derivation is in `skills/expertflyer/scripts/expertflyer.py`.
 
-On `null`, `row_seen_in` names the scanned cabins where the row did turn up. A non-empty list is a reason to confirm the cabin with the operator before acting on the verdict. It is not a verdict of its own — report the assessment either way.
+On `null`, `row_seen_in` names the scanned cabins where the row did turn up. A non-empty list is a reason to confirm the cabin with the operator before acting on the verdict. Report the assessment either way.
 
 Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 
