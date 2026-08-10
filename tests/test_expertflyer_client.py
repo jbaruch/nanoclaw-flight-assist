@@ -231,3 +231,13 @@ def test_main_exits_zero_on_success(capture, capsys):
     capture["_payload"] = {"count": 3, "alerts": []}
     assert client.main(["alerts"]) == 0
     assert json.loads(capsys.readouterr().out)["count"] == 3
+
+
+def test_default_url_addresses_the_bridge_by_ip_not_the_bypassed_hostname():
+    """host.docker.internal is in nanoclaw's AGENT_PROXY_BYPASS_HOSTS.
+
+    Defaulting to that name would skip the OneCLI gateway, so the container's
+    `onecli-managed` placeholder would go out unswapped and earn a 401.
+    """
+    assert client.DEFAULT_URL == "http://172.17.0.1:8090"
+    assert "host.docker.internal" not in client.DEFAULT_URL
