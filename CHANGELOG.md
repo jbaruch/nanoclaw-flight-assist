@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.111 — 2026-08-10
+
 ### Fixed — a seat in a better cabin was reported as one to go and take
 
 Found on the second live trip sweep, which told the operator their Comfort+ seat was beaten by 2D in First. It is not a seat they can select: moving cabins is a fare change or an upgrade clearance, and the airline's app offers no button for it. The reply was actionable-sounding and unactionable.
