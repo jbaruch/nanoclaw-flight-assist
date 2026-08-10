@@ -104,18 +104,6 @@ def cabins_at_or_above(cabin: str, rungs: int) -> list[str]:
     return sorted(reachable, key=lambda c: CABIN_SCORE[c], reverse=True)
 
 
-def cabin_below(cabin: str) -> str | None:
-    """The next cabin down the ladder, or None at the bottom.
-
-    A sweep that only looks up never reads the cabin a seat is most often
-    mistaken for: the operator says Comfort+ while sitting in Main, one rung
-    below.
-    """
-    score = CABIN_SCORE[cabin_code(cabin)]
-    lower = [c for c, other in CABIN_SCORE.items() if other < score]
-    return max(lower, key=lambda c: CABIN_SCORE[c]) if lower else None
-
-
 def cabins_above(cabin: str) -> list[str]:
     """Every cabin that outranks this one, best first.
 

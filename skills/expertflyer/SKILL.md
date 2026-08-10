@@ -77,21 +77,22 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Three shapes come back without an assessment, and none of them carries `verdict` or `held`:
+Three shapes come back without an assessment, and two of them carry no `verdict` at all:
 
 1. `error: "bad_request"` with `detail` — an unusable argument, such as an unrecognised cabin or a seat that is not a designator. `cabins_absent` rides along when the aircraft has no such cabin.
 2. `error` with `detail`, `cabin_failed` and `cabins_requested` — a cabin did not load. Go to Step 6.
-3. `verdict: "no_held_seat"` with `detail` — nothing was requested, so there is nothing else to report.
+
+`verdict: "no_held_seat"` is the third. It carries `verdict` and `detail` and no `held`, because nothing was requested.
 
 Every assessed response carries `verdict`, `held` (with `why` and `position_source`), `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared` and `held_cabin_corroborated`.
 
 `optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` and carries none of those three. Their absence is the contract, not a malformed response.
 
-`cabins_probed` and `cabin_probe_failed` appear only when a cabin below the sweep was read to corroborate the held seat's row.
-
 `cabins_scanned` is the whole evidence base and `seats_compared` is its size. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
 
-`held_cabin_corroborated` is `true` when the held seat's row was seen in the cabin it was assessed as, `false` when seen only elsewhere, `null` when nothing could show it either way. On `null`, say the cabin went unconfirmed. `cabin_probe_failed` names why when a probe is the reason.
+`held_cabin_corroborated` is `true` when the held seat's row was seen in the cabin it was assessed as, and `null` otherwise. It is never `false`. `/seats` reports bookable seats, so a row whose every seat is taken is missing from the response while still being in the cabin, and cabins split mid-row so one row number can sit in two of them. Absence is not disproof.
+
+On `null`, `row_seen_in` names the scanned cabins where the row did turn up. A non-empty list is a reason to confirm the cabin with the operator before acting on the verdict. It is not a verdict of its own — report the assessment either way.
 
 Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 
@@ -126,18 +127,11 @@ Never report `optimal` as "nothing better exists". The sweep reads `cabins_scann
 - Offer to widen the sweep with `--scan-up`.
 - Check the cabin: a sold-out cabin and a seat that is not in that cabin look identical here.
 
-**`held_cabin_mismatch`** — the held seat's row appears in another cabin and nowhere in the one it was assessed as.
-
-- Relay `detail`. It names the cabin the row was actually seen in.
-- Confirm the cabin with the operator.
-- Re-run with the corrected `--held-cabin`.
-- `cabins_probed` names any cabin read below the sweep to corroborate the row.
-
 **`error`** — go to Step 6.
 
 - `cabin_failed` names the cabin that did not load.
 
-`no_held_seat`, `held_position_unknown`, `nothing_open` and `held_cabin_mismatch` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
+`no_held_seat`, `held_position_unknown` and `nothing_open` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
@@ -162,7 +156,7 @@ Report only the flights that need something:
 
 - `upgrade` → name the flight and `best_upgrade`
 - `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
-- `no_held_seat`, `held_position_unknown`, `nothing_open` or `held_cabin_mismatch` → name the flight as unanswered, never as fine
+- `no_held_seat`, `held_position_unknown` or `nothing_open` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 
 A flight whose verdict never came back is not a flight with good seats. Say which ones were not answered.

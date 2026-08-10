@@ -165,7 +165,6 @@ VERDICT_UPGRADE = "upgrade"
 VERDICT_NO_HELD_SEAT = "no_held_seat"
 VERDICT_POSITION_UNKNOWN = "held_position_unknown"
 VERDICT_NOTHING_OPEN = "nothing_open"
-VERDICT_CABIN_MISMATCH = "held_cabin_mismatch"
 
 
 def _has_row(response: dict, row: int) -> bool:
@@ -402,7 +401,6 @@ def _assess(args) -> dict:
         scanned[held_cabin].get("exit_rows"),
     )
     open_seats = [seat for response in scanned.values() for seat in response.get("seats", [])]
-    probed: dict[str, dict] = {}
     common = {
         "flight": scanned[held_cabin].get("flight"),
         "route": scanned[held_cabin].get("route"),
@@ -416,70 +414,23 @@ def _assess(args) -> dict:
     }
 
     # The held seat is occupied and never appears in a response. Its row can
-    # still show up — under another passenger's seat in the same row — and when
-    # that row is only ever seen in a DIFFERENT cabin, the cabin the operator
-    # named is wrong, and every rung, layout and verdict downstream is too.
-    #
-    # The sweep only looks UP the ladder, so the cabin a seat is mistaken for
-    # is usually the one cabin it never reads: the operator says Comfort+ while
-    # sitting in Main, one rung below. Probing down costs one request, and only
-    # when the held cabin failed to corroborate the row itself.
-    below = seat_quality.cabin_below(held_cabin)
-    probe_failed: dict | None = None
-    if below is not None and below not in scanned and not _has_row(scanned[held_cabin], row):
-        probe = _seats_in_cabin(args, below, "any")
-        # A failed probe is not a verdict. The sweep proper already succeeded,
-        # so a corroboration request that could not run leaves the cabin
-        # unconfirmed rather than turning a good answer into an error — but it
-        # is reported both ways, never swallowed: a caller reading a verdict
-        # has to know the cabin behind it went unchecked.
-        if "error" in probe:
-            probe_failed = {
-                "cabin": below,
-                "error": probe["error"],
-                "detail": probe.get("detail", probe["error"]),
-            }
-            print(
-                f"expertflyer: could not corroborate the held cabin — the {below} probe "
-                f"failed ({probe_failed['detail']}); the verdict below assumes seat "
-                f"{args.held!r} really is in {held_cabin}",
-                file=sys.stderr,
-            )
-        elif probe.get("cabin_present") is not False:
-            probed[below] = probe
-
-    elsewhere = sorted(
-        code
-        for code, response in {**scanned, **probed}.items()
-        if code != held_cabin and _has_row(response, row)
-    )
-    if _has_row(scanned[held_cabin], row):
-        corroborated = True
-    elif elsewhere:
-        corroborated = False
-    else:
-        # Nothing showed the row either way. Every cabin that could have is
-        # sold out, absent, or failed to load.
-        corroborated = None
-    common["held_cabin_corroborated"] = corroborated
-    if probed:
-        common["cabins_probed"] = sorted(probed)
-    if probe_failed is not None:
-        common["cabin_probe_failed"] = probe_failed
-
-    if corroborated is False:
-        return {
-            **common,
-            "verdict": VERDICT_CABIN_MISMATCH,
-            "held": held,
-            "detail": (
-                f"seat {args.held!r} was assessed as a {held_cabin} seat, but row {row} shows up "
-                f"in {', '.join(elsewhere)} and nowhere in {held_cabin} — so the seat is very "
-                f"likely in {elsewhere[0]}, not {held_cabin}. Re-run with the right --held-cabin; "
-                "the cabin decides the ladder rung and the exit-row layout, so every part of the "
-                "verdict depends on it."
-            ),
-        }
+    # still show up — under another passenger's seat in the same row — and that
+    # is worth surfacing. It is NOT worth refusing on: `/seats` reports bookable
+    # seats, so a row whose every seat is taken is missing from the held cabin's
+    # response while still being in it. Cabins also split mid-row (the 739's
+    # Comfort+ ends a row later on the right), so one row number legitimately
+    # appears in two cabins. Absence here is not disproof of membership, and
+    # disproving it needs the cabin's row layout the service does not yet
+    # report (jbaruch/expertflyer-api#20).
+    seen_in_held = _has_row(scanned[held_cabin], row)
+    common["held_cabin_corroborated"] = True if seen_in_held else None
+    if not seen_in_held:
+        # A hint for the agent to confirm the cabin, never a verdict.
+        common["row_seen_in"] = sorted(
+            code
+            for code, response in scanned.items()
+            if code != held_cabin and _has_row(response, row)
+        )
 
     # A sweep that saw nothing has nothing to compare. `optimal` off an empty
     # evidence base is true the way "no counterexample was found" is true after
@@ -587,7 +538,6 @@ UNANSWERED = frozenset(
     {
         VERDICT_NO_HELD_SEAT,
         VERDICT_POSITION_UNKNOWN,
-        VERDICT_CABIN_MISMATCH,
         VERDICT_NOTHING_OPEN,
     }
 )

@@ -546,11 +546,3 @@ def test_the_cabins_a_sweep_stopped_short_of_are_nameable():
     assert sq.cabins_above(W) == [F, C, A]
     assert sq.cabins_above(F) == []
     assert sq.cabins_above(Y) == [F, C, A, W]
-
-
-def test_the_cabin_one_rung_down_is_nameable():
-    """The sweep looks up, so the cabin a seat is mistaken for is the one it
-    never reads — Comfort+ claimed while sitting in Main, one rung below."""
-    assert sq.cabin_below(W) == Y
-    assert sq.cabin_below(F) == C
-    assert sq.cabin_below(Y) is None

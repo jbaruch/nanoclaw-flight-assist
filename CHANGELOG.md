@@ -6,17 +6,13 @@ Both found on the first live run against the deployed service, and both let `ass
 
 `assess` reported `optimal` after observing **zero** open seats. Comfort+ was sold out and Premium Select is not on the aircraft, so the sweep compared the held seat against nothing and said nothing beat it. True the way "no counterexample was found" is true after looking in no drawers, and it reads as a comparison that happened. A sweep that saw no open seat now returns `nothing_open` with `seats_compared: 0`, exits non-zero, and carries no `upgrades` or `alert_recommended`.
 
-`--held-cabin` was taken on faith. The cabin decides the ladder rung and the exit-row layout, so a wrong one poisons every part of the verdict downstream — and nothing checked it. On DL2957 seat 21F was assessed as Comfort+ while row 21 sits in the Main Cabin, an exit row that reclines; the sweep scanned Comfort+ and Premium Select and never looked at the cabin the seat is actually in.
+`--held-cabin` was taken on faith and still largely is, but the sweep now says how much it could confirm. `held_cabin_corroborated` is `true` when the held seat's row turned up in the cabin it was assessed as, and `null` otherwise; `row_seen_in` names the scanned cabins where the row did appear.
 
-The held seat is occupied, so it never appears in a response, but its row can — under another passenger's seat in the same row. A row seen in a cabin other than the one named, and nowhere in the one named, now returns `held_cabin_mismatch` naming where the row was actually found.
+It is never `false`, and an earlier draft of this change that refused on absence was wrong. `/seats` reports bookable seats, so a row whose every seat is occupied is missing from its own cabin's response. Cabins also split mid-row — the 739's Comfort+ ends a row later on the right — so one row number legitimately sits in two cabins. Absence is not disproof, and refusing on it would reject correct assessments.
 
-The sweep only reads up the ladder, so the cabin a seat is mistaken for is the one cabin it never looks at: Comfort+ claimed while sitting in Main, one rung below. When the held cabin cannot corroborate the row itself, `assess` probes one rung down. That request sits outside `--scan-up` — it corroborates the cabin rather than widening the evidence base — and it runs only on the uncorroborated case, so the ordinary path costs nothing extra. A probe that errors leaves the cabin unconfirmed rather than turning a good answer into an error.
+Disproof needs the cabin's row layout, which the service already parses (that is how `exit_rows` covers a sold-out exit row) and does not report. Filed as jbaruch/expertflyer-api#20.
 
-A probe that fails is reported, never swallowed: `cabin_probe_failed` carries the fault and a stderr warning names it, because a caller reading a verdict has to know the cabin behind it went unchecked. `held_cabin_corroborated` states the outcome directly — `true` when the row was seen in the cabin claimed, `false` when seen only elsewhere, `null` when nothing could show it.
-
-The output contract is now stated per response shape rather than as one flat list. Three responses precede any assessment and carry neither `verdict` nor `held`: an unusable argument, a cabin that failed to load, and `no_held_seat`. Naming them keeps an agent from reading a valid error as a malformed response. `optimal` and `upgrade` carry `upgrades`, `best_upgrade` and `alert_recommended`; every other verdict carries `detail` and none of those three. The absence is the contract — a verdict that judged nothing has no upgrade list — and saying so keeps an agent from reading a refusal as a malformed response.
-
-Both cabins being sold out defeats it: neither can show the row. The service holds the answer already — it parses every seat cell, sold out or not, which is how `exit_rows` covers an occupied exit row — so the durable fix is a cabin row list from the service (jbaruch/expertflyer-api#20).
+The output contract is now stated per response shape rather than as one flat list. Two responses carry no `verdict` at all — an unusable argument and a cabin that failed to load — and `no_held_seat` carries `verdict` without `held`. Naming them keeps an agent from reading a valid error as a malformed response.
 
 ## 0.2.106 — 2026-08-10
 
