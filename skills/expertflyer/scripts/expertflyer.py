@@ -412,6 +412,15 @@ def _assess(args) -> dict:
         # as "nothing anywhere on this aircraft beats your seat".
         "cabins_unscanned": seat_quality.cabins_above(cabins[0]),
         "seats_compared": len(open_seats),
+        # Per cabin, how many open seats were worth taking at all. `optimal`
+        # says nothing open beat the held seat; it never says the held seat
+        # outranks a cabin. A cabin at 0 had nothing to beat it WITH, and that
+        # distinction is the difference between "Comfort+ was empty" and the
+        # false "this seat beats Comfort+".
+        "acceptable_by_cabin": {
+            code: len(seat_quality.rank_seats(response.get("seats", []), code))
+            for code, response in scanned.items()
+        },
     }
 
     # The held seat is occupied and never appears in a response. Its row can

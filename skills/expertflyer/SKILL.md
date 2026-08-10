@@ -89,7 +89,7 @@ Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent
 
 `optimal` and `upgrade` add `upgrades`, `best_upgrade` and `alert_recommended`. Every other verdict adds `detail` and carries none of those three. Their absence is the contract, not a malformed response.
 
-`cabins_scanned` is the whole evidence base and `seats_compared` is its size. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
+`cabins_scanned` is the whole evidence base, `seats_compared` is its size, and `acceptable_by_cabin` breaks it down per cabin into seats worth taking. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
 
 `held_cabin_corroborated` is `true` when the held seat's row is in the cabin it was assessed as, `false` when it is not, and `null` when the service could not settle it. `held_cabin_source` says which answered: `rows` is the cabin's own extent and decides it either way, `seats` is the older availability-derived fallback and can only ever confirm. Derivation is in `skills/expertflyer/scripts/expertflyer.py`.
 
@@ -105,6 +105,8 @@ Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 - Offer the alert (Step 5) on the cabins in `cabins_scanned`.
 
 Never report `optimal` as "nothing better exists". The sweep reads `cabins_scanned` and stops. A cabin in `cabins_unscanned` may hold a better seat and was never looked at.
+
+Never say the held seat beat a cabin. `optimal` compares it against the seats that were open, never against a cabin's standing. `acceptable_by_cabin` gives the true reason per cabin: `0` means nothing there was worth taking, which is a cabin that was empty rather than a cabin that lost. A better cabin still outranks the held seat the moment an acceptable seat opens in it.
 
 **`upgrade`** — something open beats it.
 
@@ -173,6 +175,8 @@ Report only the flights that need something:
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 
 A flight whose verdict never came back is not a flight with good seats. Say which ones were not answered.
+
+Then offer the alert once, for every flight whose `alert_recommended` is true, naming those flights and their `cabins_scanned`. Step 3's alert offer is not optional here because the report is per trip: a seat that is the best of nothing open is exactly the seat worth watching.
 
 Finish here unless the operator accepts an alert.
 
