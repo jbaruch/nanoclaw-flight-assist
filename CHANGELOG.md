@@ -1,5 +1,21 @@
 # Changelog
 
+### Added — review seats across upcoming flights (#229)
+
+`skills/expertflyer/scripts/upcoming-flights.py` turns the travel schedule into the seat pass's work list: which flights are coming up, and how to name them to the ExpertFlyer service. It performs no network call — the skill runs it, then runs the per-flight seat check.
+
+Departures inside the next 12 hours are skipped. By then check-in has assigned a seat and moving rarely helps, so reporting them is noise.
+
+The reference instant is injected with `--now` rather than read from the clock, so the suite does not rot as the real date advances. A summary that does not parse is skipped rather than guessed at — better to miss a flight than to invent a flight number from prose like "Rebooked - see email". Re-synced duplicates collapse on the stable TripIt `uid`.
+
+The new skill step reports only flights that need something: a seat worth taking, or an empty cabin worth watching. A flight where the cabin does not exist on the aircraft, or where nothing better is open, is passed over silently.
+
+Without a TripIt `uid` the dedupe key carries route and departure as well as carrier, number and date: a through flight keeps its number across legs on the same day, so a narrower key silently dropped one of them.
+
+Input faults are reported, never raised: a malformed `--now`, a schedule whose root is a valid JSON scalar rather than a list, a file that cannot be read or is not UTF-8, and an unparseable event timestamp each produce structured JSON on stdout with a stderr diagnostic that names the recovery — regenerating the schedule with `tessl__nightly-travel-sync`, or checking the group volume is mounted and readable. A malformed `--date` on the client is caught before the previous-day retry computes it. A single bad timestamp skips its own event rather than losing the whole schedule, exactly as an unparseable summary does.
+
+One known edge is handled in code rather than in prose: the schedule stamps UTC, so a late-evening local departure falls on the next UTC day and the service finds no such flight. The client retries the previous day itself and reports `date_fallback_applied` when it did, since fixed branching belongs in the script rather than in agent judgement. It is opt-in via `--date-fallback` and only the schedule-derived pass passes it: against a date the operator named, a flight that genuinely does not operate that day must say so rather than return the previous day's flight and rank its seats as the requested one's. Only an unresolved route triggers it — an auth failure is not a date problem. When the retry itself fails, its own error is returned rather than the first one, so an expired session does not surface as "no such flight"; `date_fallback_attempted` records that the retry happened.
+
 ## 0.2.100 — 2026-08-10
 
 ### Fixed — seat-ranking defects found in review, and the ranking is now actually wired (#229)

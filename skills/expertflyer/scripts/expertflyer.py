@@ -21,6 +21,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -82,6 +83,21 @@ def _request(method: str, path: str, params: dict | None = None, body: dict | No
         }
 
 
+# The schedule stamps UTC, so a departure late in the local evening falls on
+# the next UTC day and the service finds no such flight. Retrying the previous
+# day is fixed logic, not judgement, so it lives here rather than in the skill.
+ROUTE_UNRESOLVED = "could not resolve a route"
+
+
+def _previous_day(date: str) -> str:
+    return (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _looks_like_wrong_date(result: dict) -> bool:
+    detail = str(result.get("detail", "")).lower()
+    return "error" in result and ROUTE_UNRESOLVED in detail
+
+
 def _rank(result: dict) -> dict:
     """Order the service's bookable seats by the operator's preferences.
 
@@ -122,6 +138,17 @@ def parse_args(argv=None):
     seats.add_argument("--want", default="non-middle")
     seats.add_argument("--origin")
     seats.add_argument("--destination")
+    seats.add_argument(
+        "--date-fallback",
+        action="store_true",
+        help=(
+            "Retry the previous day when the flight is not found on --date. "
+            "Only for dates derived from the UTC travel schedule, where a late "
+            "local departure lands on the next UTC day. Off by default: for a "
+            "date the operator named, a flight that does not operate that day "
+            "must report that, not seats from another day's flight."
+        ),
+    )
 
     fare = sub.add_parser("fare-class", help="Fare-class inventory for a flight")
     fare.add_argument("--origin", required=True)
@@ -154,19 +181,47 @@ def parse_args(argv=None):
 
 def run(args) -> dict:
     if args.action == "seats":
-        result = _request(
-            "GET",
-            "/seats",
-            {
-                "airline": args.airline,
-                "flight": args.flight,
-                "date": args.date,
-                "cabin": args.cabin,
-                "want": args.want,
-                "origin": args.origin,
-                "destination": args.destination,
-            },
-        )
+
+        def seats_on(date: str) -> dict:
+            return _request(
+                "GET",
+                "/seats",
+                {
+                    "airline": args.airline,
+                    "flight": args.flight,
+                    "date": date,
+                    "cabin": args.cabin,
+                    "want": args.want,
+                    "origin": args.origin,
+                    "destination": args.destination,
+                },
+            )
+
+        result = seats_on(args.date)
+        # Opt-in only. The retry is sound when the date came from the UTC
+        # schedule; against a date the operator named it would answer about a
+        # different day's flight and present it as the requested one.
+        if _looks_like_wrong_date(result) and args.date_fallback:
+            try:
+                fallback = _previous_day(args.date)
+            except ValueError:
+                return {
+                    "error": "bad_request",
+                    "detail": (
+                        f"--date {args.date!r} is not YYYY-MM-DD, so the "
+                        "previous-day retry cannot be computed — pass the "
+                        "departure date as e.g. 2026-08-31"
+                    ),
+                }
+            retried = seats_on(fallback)
+            # Report the retry's own outcome. Returning the first error instead
+            # would hide what actually went wrong the second time — an expired
+            # session or an unreachable service reported as "no such flight".
+            if "error" not in retried:
+                retried["date_fallback_applied"] = fallback
+            else:
+                retried["date_fallback_attempted"] = fallback
+            return _rank(retried)
         return _rank(result)
     if args.action == "fare-class":
         return _request(
