@@ -185,7 +185,17 @@ def run(args) -> dict:
 
         result = seats_on(args.date)
         if _looks_like_wrong_date(result) and not args.no_date_fallback:
-            fallback = _previous_day(args.date)
+            try:
+                fallback = _previous_day(args.date)
+            except ValueError:
+                return {
+                    "error": "bad_request",
+                    "detail": (
+                        f"--date {args.date!r} is not YYYY-MM-DD, so the "
+                        "previous-day retry cannot be computed — pass the "
+                        "departure date as e.g. 2026-08-31"
+                    ),
+                }
             retried = seats_on(fallback)
             # Report the retry's own outcome. Returning the first error instead
             # would hide what actually went wrong the second time — an expired

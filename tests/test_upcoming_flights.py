@@ -189,15 +189,31 @@ def test_an_unreadable_schedule_reports_rather_than_tracebacks(tmp_path, capsys)
     assert json.loads(capsys.readouterr().out)["error"] == "unreadable_schedule"
 
 
-def test_a_permission_failure_reports_rather_than_tracebacks(tmp_path, capsys):
-    import os
-
+def test_a_permission_failure_reports_rather_than_tracebacks(tmp_path, capsys, monkeypatch):
+    """Mocked rather than chmod: a privileged test user can read 0o000 anyway."""
     path = tmp_path / "s.json"
     path.write_text(json.dumps([DL2957]))
-    os.chmod(path, 0o000)
-    try:
-        code = uf.main(["--schedule", str(path), "--now", NOW])
-    finally:
-        os.chmod(path, 0o644)
+
+    def deny(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(uf.Path, "read_text", deny)
+    code = uf.main(["--schedule", str(path), "--now", NOW])
     assert code == 1
     assert json.loads(capsys.readouterr().out)["error"] == "unreadable_schedule"
+
+
+def test_every_failure_diagnostic_names_a_recovery_action(tmp_path, capsys):
+    """Actionable Messages: say what to do, not only what broke."""
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    uf.main(["--schedule", str(bad), "--now", NOW])
+    assert "nightly-travel-sync" in capsys.readouterr().err
+
+    scalar = tmp_path / "scalar.json"
+    scalar.write_text("42")
+    uf.main(["--schedule", str(scalar), "--now", NOW])
+    assert "nightly-travel-sync" in capsys.readouterr().err
+
+    uf.main(["--schedule", str(tmp_path / "absent.json"), "--now", NOW])
+    assert "nightly-travel-sync" in capsys.readouterr().err

@@ -141,16 +141,29 @@ def main(argv=None) -> int:
         events = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
         print(json.dumps({"error": "bad_schedule", "detail": str(exc)}))
-        print(f"upcoming-flights: {path} is not valid JSON — {exc}", file=sys.stderr)
+        print(
+            f"upcoming-flights: {path} is not valid JSON ({exc}) — "
+            "regenerate it with tessl__nightly-travel-sync, or restore the file from a backup",
+            file=sys.stderr,
+        )
         return 1
     except UnicodeDecodeError as exc:
         print(json.dumps({"error": "unreadable_schedule", "detail": str(exc)}))
-        print(f"upcoming-flights: {path} is not UTF-8 text — {exc}", file=sys.stderr)
+        print(
+            f"upcoming-flights: {path} is not UTF-8 text ({exc}) — "
+            "regenerate it with tessl__nightly-travel-sync so it is rewritten as UTF-8",
+            file=sys.stderr,
+        )
         return 1
     except OSError as exc:
         # PermissionError, ENOENT on a racing delete, a mount that vanished.
         print(json.dumps({"error": "unreadable_schedule", "detail": str(exc)}))
-        print(f"upcoming-flights: cannot read {path} — {exc}", file=sys.stderr)
+        print(
+            f"upcoming-flights: cannot read {path} ({exc}) — check the group "
+            "volume is mounted and the file is readable by the agent user, then "
+            "regenerate it with tessl__nightly-travel-sync",
+            file=sys.stderr,
+        )
         return 1
 
     if isinstance(events, dict):
@@ -160,7 +173,9 @@ def main(argv=None) -> int:
         print(json.dumps({"error": "bad_schedule", "detail": "root is not a list of events"}))
         print(
             f"upcoming-flights: {path} parsed but is a "
-            f"{type(events).__name__}, not a list of events",
+            f"{type(events).__name__}, not a list of events — the schedule must "
+            "be a JSON list, or an object with an events/items key; "
+            "regenerate it with tessl__nightly-travel-sync",
             file=sys.stderr,
         )
         return 1
