@@ -16,6 +16,20 @@ Also replaced future-date literals in the client tests with fixed past dates (#2
 
 The seats step then had two directives that could disagree. `matching` is the service's own filter and can list a seat the ranking refuses — a middle, for `--want middle` or `--want any` — so an agent following both would report a seat as open AND treat nothing as worth taking. The availability and alert decision now reads `best` / `acceptable_total` alone, with `cabin_present` handled first and `matching` demoted to informational. Prose script references are repo-relative, which also corrected an older one for the client itself.
 
+### Fixed — the exit-row recline tier is derived from the cabin layout (#249)
+
+Ranking distinguished a reclining exit row from a fixed-back one by reading a `reclines` field that the seat map does not carry. The deployed service returns `isExitRow` and `row` and no recline signal, so the distinction never fired and both exit rows ranked identically — on a Main Cabin flight the skill could have pointed at the fixed-back row.
+
+It is now read off geometry. An exit row cannot recline when another exit row sits directly behind it, which is precisely why the forward row of a pair is fixed and the second is the one worth having. A lone exit row has nothing behind it and reclines.
+
+The ranked output carries the derived tier through to its description too: the client computes the tiers once and passes them to both ranking and rendering, so a derived reclining row reads as `21A (window, exit row, reclines)` rather than a bare `exit row`.
+
+Adjacency needs the cabin's FULL exit-row layout, not the seats on offer. The service reports bookable seats only, so an occupied rear exit row is invisible — deriving the tier from that list alone would call the open row in front of it reclining, recommending precisely the fixed-back seat the operator does not want. Ranking therefore takes the layout separately and, without it, claims no exit row reclines: an explicit per-seat flag is still honoured where one exists, but absent evidence never promotes.
+
+Within a supplied layout, a middle in the row behind still fixes the row in front, so tiers are computed across every row rather than only the bookable ones.
+
+The layout reaches `is_upgrade()` as well as bulk ranking. Without it the watch case compared a rear reclining exit row as though it were fixed-back, so the seat that opened could lose to the forward row it should beat — the one comparison that function exists to make. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
+
 ### Added — review seats across upcoming flights (#229)
 
 `skills/expertflyer/scripts/upcoming-flights.py` turns the travel schedule into the seat pass's work list: which flights are coming up, and how to name them to the ExpertFlyer service. It performs no network call — the skill runs it, then runs the per-flight seat check.
@@ -31,6 +45,7 @@ Without a TripIt `uid` the dedupe key carries route and departure as well as car
 Input faults are reported, never raised: a malformed `--now`, a schedule whose root is a valid JSON scalar rather than a list, a file that cannot be read or is not UTF-8, and an unparseable event timestamp each produce structured JSON on stdout with a stderr diagnostic that names the recovery — regenerating the schedule with `tessl__nightly-travel-sync`, or checking the group volume is mounted and readable. A malformed `--date` on the client is caught before the previous-day retry computes it. A single bad timestamp skips its own event rather than losing the whole schedule, exactly as an unparseable summary does.
 
 One known edge is handled in code rather than in prose: the schedule stamps UTC, so a late-evening local departure falls on the next UTC day and the service finds no such flight. The client retries the previous day itself and reports `date_fallback_applied` when it did, since fixed branching belongs in the script rather than in agent judgement. Only an unresolved route triggers it — an auth failure is not a date problem. When the retry itself fails, its own error is returned rather than the first one, so an expired session does not surface as "no such flight"; `date_fallback_attempted` records that the retry happened. `--no-date-fallback` suppresses it.
+||||||| 6c84363
 
 ## 0.2.98 — 2026-08-10
 

@@ -108,10 +108,18 @@ def _rank(result: dict) -> dict:
     if "error" in result or not isinstance(result.get("seats"), list):
         return result
     cabin = result.get("cabin")
-    ranked = seat_quality.rank_seats(result["seats"], cabin)
-    result["ranked"] = [{**s, "why": seat_quality.describe(s, cabin)} for s in ranked]
+    # Recline is derived from the cabin's exit-row layout, so descriptions need
+    # the same tiers ranking used. Without them a derived reclining row renders
+    # as a plain "exit row", because service seats carry no recline field.
+    # `exit_rows` is the cabin's full layout when the service supplies it.
+    # Without it the seats list holds bookable seats only, so an occupied rear
+    # exit row is invisible and nothing is claimed to recline.
+    layout = result.get("exit_rows")
+    tiers = seat_quality.exit_tiers(result["seats"], layout)
+    ranked = seat_quality.rank_seats(result["seats"], cabin, layout)
+    result["ranked"] = [{**s, "why": seat_quality.describe(s, cabin, tiers)} for s in ranked]
     best = ranked[0] if ranked else None
-    result["best"] = seat_quality.describe(best, cabin) if best else None
+    result["best"] = seat_quality.describe(best, cabin, tiers) if best else None
     # Every open seat may still be unacceptable — a cabin of middles ranks to
     # nothing even though `available_total` is non-zero.
     result["acceptable_total"] = len(ranked)

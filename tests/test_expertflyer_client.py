@@ -311,12 +311,82 @@ def test_a_response_without_seats_is_left_alone():
     assert client._rank(dict(old)) == old
 
 
+def test_rank_labels_the_reclining_exit_row_on_the_production_path():
+    """Service seats carry no recline field; the tier comes from adjacency.
+
+    Exercises _rank() rather than describe() directly — the earlier test passed
+    tiers by hand and so could not catch the production call omitting them.
+    """
+    payload = {
+        "cabin": "Y",
+        "seats": [
+            {
+                "label": "20A",
+                "row": 20,
+                "column": "A",
+                "position": "window",
+                "isExitRow": True,
+                "cabin": "Y",
+            },
+            {
+                "label": "21A",
+                "row": 21,
+                "column": "A",
+                "position": "window",
+                "isExitRow": True,
+                "cabin": "Y",
+            },
+        ],
+        "exit_rows": [20, 21],
+        "available_total": 2,
+    }
+    out = client._rank(payload)
+    assert out["best"] == "21A (window, exit row, reclines)"
+    assert out["ranked"][0]["why"] == "21A (window, exit row, reclines)"
+    # The row in front is fixed-back precisely because 21 sits behind it.
+    assert out["ranked"][1]["why"] == "20A (window, exit row)"
+
+
+def test_rank_does_not_promote_an_exit_row_when_the_layout_is_absent():
+    """No `exit_rows` from the service: the rear row may be occupied."""
+    payload = {
+        "cabin": "Y",
+        "seats": [
+            {
+                "label": "20A",
+                "row": 20,
+                "column": "A",
+                "position": "window",
+                "isExitRow": True,
+                "cabin": "Y",
+            },
+        ],
+        "available_total": 1,
+    }
+    assert client._rank(payload)["best"] == "20A (window, exit row)"
+
+
 # --- the UTC-date fallback lives in the script, not in agent prose -----------
 
 
 def test_previous_day_is_computed_not_string_sliced():
     assert client._previous_day("2024-03-01") == "2024-02-29"  # leap year
     assert client._previous_day("2024-01-01") == "2023-12-31"
+
+
+def _seats_argv(date, *extra):
+    return [
+        "seats",
+        "--airline",
+        "DL",
+        "--flight",
+        "9",
+        "--date",
+        date,
+        "--cabin",
+        "W",
+        *extra,
+    ]
 
 
 def test_a_flight_missing_on_the_utc_date_is_retried_on_the_previous_day(monkeypatch):
@@ -330,11 +400,7 @@ def test_a_flight_missing_on_the_utc_date_is_retried_on_the_previous_day(monkeyp
         return {"cabin": "W", "seats": [], "available_total": 0}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(
-        client.parse_args(
-            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
-        )
-    )
+    out = client.run(client.parse_args(_seats_argv("2024-03-07")))
     assert calls == ["2024-03-07", "2024-03-06"]
     assert out["date_fallback_applied"] == "2024-03-06"
 
@@ -347,22 +413,7 @@ def test_the_fallback_can_be_suppressed(monkeypatch):
         return {"error": "error", "detail": "could not resolve a route for DL9"}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(
-        client.parse_args(
-            [
-                "seats",
-                "--airline",
-                "DL",
-                "--flight",
-                "9",
-                "--date",
-                "2024-03-07",
-                "--cabin",
-                "W",
-                "--no-date-fallback",
-            ]
-        )
-    )
+    out = client.run(client.parse_args(_seats_argv("2024-03-07", "--no-date-fallback")))
     assert calls == ["2024-03-07"]
     assert out["error"] == "error"
 
@@ -376,11 +427,7 @@ def test_an_unrelated_error_is_not_retried(monkeypatch):
         return {"error": "auth", "detail": "session expired"}
 
     monkeypatch.setattr(client, "_request", fake)
-    client.run(
-        client.parse_args(
-            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
-        )
-    )
+    client.run(client.parse_args(_seats_argv("2024-03-07")))
     assert calls == ["2024-03-07"]
 
 
@@ -392,11 +439,7 @@ def test_a_successful_first_try_is_not_retried(monkeypatch):
         return {"cabin": "W", "seats": [], "available_total": 0}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(
-        client.parse_args(
-            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
-        )
-    )
+    out = client.run(client.parse_args(_seats_argv("2024-03-07")))
     assert calls == ["2024-03-07"]
     assert "date_fallback_applied" not in out
 
@@ -410,11 +453,7 @@ def test_a_failed_retry_reports_its_own_error_not_the_first_one(monkeypatch):
         return {"error": "auth", "detail": "session expired"}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(
-        client.parse_args(
-            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
-        )
-    )
+    out = client.run(client.parse_args(_seats_argv("2024-03-07")))
     assert out["error"] == "auth"
     assert out["detail"] == "session expired"
     assert out["date_fallback_attempted"] == "2024-03-06"
@@ -428,10 +467,6 @@ def test_a_malformed_date_reports_rather_than_tracebacks(monkeypatch):
         return {"error": "error", "detail": "could not resolve a route for DL9"}
 
     monkeypatch.setattr(client, "_request", fake)
-    out = client.run(
-        client.parse_args(
-            ["seats", "--airline", "DL", "--flight", "9", "--date", "next tuesday", "--cabin", "W"]
-        )
-    )
+    out = client.run(client.parse_args(_seats_argv("next tuesday")))
     assert out["error"] == "bad_request"
     assert "YYYY-MM-DD" in out["detail"]
