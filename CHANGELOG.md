@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.110 — 2026-08-10
+
 ### Fixed — the trip report explained the verdict wrongly, and never offered the alert
 
 Both found in the first live trip sweep, which returned correct verdicts and then described one of them backwards.
