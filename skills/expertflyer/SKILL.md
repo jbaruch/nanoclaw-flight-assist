@@ -73,7 +73,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
     --held 21F --held-cabin "comfort+" --held-position window
 ```
 
-`--held` is the seat currently assigned. `--held-cabin` is the cabin it is in. `--held-position` is `window`, `aisle` or `middle`; omit it and the column is read off the open seats in the same cabin. `--scan-up` sets how many cabins above the held one to include — the default and its cost are in `skills/expertflyer/scripts/expertflyer.py`.
+`--held` is the seat currently assigned. `--held-cabin` is the cabin it is in. `--held-position` is `window`, `aisle` or `middle`; omit it and the column is read off the open seats in the same cabin. `--held-exit-row` / `--no-held-exit-row` states whether the seat is in an exit row; omit both and the cabin's layout decides. `--scan-up` sets how many cabins above the held one to include — the default and its cost are in `skills/expertflyer/scripts/expertflyer.py`.
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
@@ -109,8 +109,10 @@ Never report `optimal` as "nothing better exists". The sweep reads `cabins_scann
 
 **`held_exit_row_unknown`** — the service sent no exit-row layout, and whether the held seat sits in one decides the verdict.
 
-- Ask the operator whether the seat is in an exit row.
 - Relay `detail`. It names what beats the seat under each reading.
+- Ask the operator whether the seat is in an exit row.
+- Re-run the command with `--held-exit-row` for yes, `--no-held-exit-row` for no.
+- Report the verdict that second run returns.
 
 **`error`** — go to Step 6.
 
@@ -137,13 +139,15 @@ Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, 
 
 Collect the held seat for every flight in one exchange before assessing any of them. Read each from byAir. Ask the operator once, in a single message, for every flight byAir has no seat for. Write each answer back to byAir.
 
+An unanswered verdict needs one more input from the operator. Gather those across every flight into a single follow-up message rather than one message per flight, then re-run Step 3 for each with the answer applied — `--held-position` for `held_position_unknown`, `--held-exit-row` / `--no-held-exit-row` for `held_exit_row_unknown`.
+
 Then run Step 3 once per flight, adding `--date-fallback`. Read `date_fallback_applied` to see which date answered. Do not pass it in Step 3 for a date the operator named.
 
 Report only the flights that need something:
 
 - `upgrade` → name the flight and `best_upgrade`
 - `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
-- `no_held_seat` or `held_position_unknown` → name the flight as unanswered, never as fine
+- `no_held_seat`, `held_position_unknown` or `held_exit_row_unknown` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 
 A flight whose verdict never came back is not a flight with good seats. Say which ones were not answered.

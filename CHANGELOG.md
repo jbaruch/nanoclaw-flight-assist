@@ -8,6 +8,8 @@ The direction of the error is what makes it worth a release. Everything else in 
 
 `isExitRow` is now `null` when the service sent no layout, with `exit_row_source` recording where the answer came from.
 
+`--held-exit-row` / `--no-held-exit-row` carries the operator's answer back in, and overrides the layout when both are present — they are looking at the aircraft. Without it the refusal would be a dead end: a question asked with nowhere to put the reply. Step 4 gathers unanswered verdicts across every flight into one follow-up message rather than one per flight.
+
 The verdict settles the unknown only when it is load-bearing. `assess` ranks the open seats against both readings of the held seat; identical results mean the missing fact never mattered and the verdict stands. Different results produce `held_exit_row_unknown`, which exits non-zero and names what beats the seat under each reading, so the operator answers one question rather than reading a guess.
 
 ## 0.2.105 — 2026-08-10

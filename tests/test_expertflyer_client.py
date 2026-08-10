@@ -635,7 +635,12 @@ def _assess(**overrides):
     for flag, value in overrides.items():
         if value is None:
             continue
-        argv += [f"--{flag.replace('_', '-')}", str(value)]
+        name = flag.replace("_", "-")
+        # A BooleanOptionalAction flag carries its answer in the flag itself.
+        if isinstance(value, bool):
+            argv.append(f"--{name}" if value else f"--no-{name}")
+        else:
+            argv += [f"--{name}", str(value)]
     return client.run(client.parse_args(argv))
 
 
@@ -994,3 +999,33 @@ def test_an_undecidable_exit_row_exits_non_zero(capsys, cabins):
     )
     assert code == 1
     assert "exit row" in capsys.readouterr().err
+
+
+def test_the_operator_s_exit_row_answer_resolves_the_verdict(cabins):
+    """`held_exit_row_unknown` is a dead end unless the answer can be passed
+    back. Both answers must reach a real verdict."""
+    seat_map = [{"label": "12A", "row": 12, "column": "A", "position": "window"}]
+
+    cabins["W"] = _cabin("W", seat_map)
+    yes = _assess(held="21F", held_position="window", held_exit_row=True)
+    assert yes["verdict"] == client.VERDICT_OPTIMAL
+    assert yes["held"]["isExitRow"] is True
+    assert yes["held"]["exit_row_source"] == "stated"
+
+    cabins["W"] = _cabin("W", seat_map)
+    no = _assess(held="21F", held_position="window", held_exit_row=False)
+    assert no["verdict"] == client.VERDICT_UPGRADE
+    assert no["best_upgrade"] == "12A (window)"
+    assert no["held"]["isExitRow"] is False
+
+
+def test_the_operator_s_answer_overrides_the_layout(cabins):
+    """They are looking at the aircraft; the layout may be stale or partial."""
+    cabins["W"] = _cabin(
+        "W",
+        [{"label": "12A", "row": 12, "column": "A", "position": "window"}],
+        exit_rows=[30],
+    )
+    out = _assess(held="21F", held_position="window", held_exit_row=True)
+    assert out["held"]["isExitRow"] is True
+    assert out["held"]["exit_row_source"] == "stated"

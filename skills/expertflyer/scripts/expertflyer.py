@@ -179,7 +179,14 @@ def _reported_labels(upgrades) -> str:
     return ", ".join(str(s.get("label")) for s in upgrades)
 
 
-def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_rows) -> dict:
+def _held_seat(
+    label: str,
+    cabin: str,
+    position: str | None,
+    cabin_seats,
+    exit_rows,
+    stated_exit_row: bool | None = None,
+) -> dict:
     """The seat already occupied, shaped so it can be ranked against open ones.
 
     The service reports bookable seats, so the held seat is absent from every
@@ -193,6 +200,20 @@ def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_r
     if position is None:
         position = seat_quality.column_positions(cabin_seats).get(column)
         source = "seat-map"
+
+    # None when the service sent no layout and the operator did not say. An
+    # absent `exit_rows` and one that excludes this row both render as False
+    # otherwise, and the two mean opposite things: the second is evidence, the
+    # first is its absence. Reading absence as False demotes an exit row the
+    # operator holds, which reports a worse open seat as an upgrade.
+    exit_row, exit_source = None, None
+    if exit_rows is not None:
+        exit_row, exit_source = int(row) in {int(r) for r in exit_rows}, "layout"
+    # The operator's answer wins: they are looking at the aircraft, and this
+    # argument exists to resolve the case where the layout was missing.
+    if stated_exit_row is not None:
+        exit_row, exit_source = bool(stated_exit_row), "stated"
+
     return {
         "label": f"{row}{column}",
         "row": row,
@@ -202,13 +223,8 @@ def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_r
         "position": position,
         "position_source": source if position else None,
         "cabin": cabin,
-        # None when the service sent no layout. An absent `exit_rows` and one
-        # that excludes this row both render as False otherwise, and the two
-        # mean opposite things: the second is evidence, the first is its
-        # absence. Reading absence as False demotes an exit row the operator
-        # holds, which reports a worse open seat as an upgrade.
-        "isExitRow": None if exit_rows is None else int(row) in {int(r) for r in exit_rows},
-        "exit_row_source": None if exit_rows is None else "layout",
+        "isExitRow": exit_row,
+        "exit_row_source": exit_source,
     }
 
 
@@ -266,6 +282,17 @@ def parse_args(argv=None):
             "How many cabins above the held one to include. Each is one more "
             f"request to a bot-walled service. Default {DEFAULT_SCAN_RUNGS}; "
             "0 checks the held cabin alone."
+        ),
+    )
+    assess.add_argument(
+        "--held-exit-row",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Whether the held seat is in an exit row, when the service sent no "
+            "layout for the cabin. Pass --held-exit-row or --no-held-exit-row "
+            "to resolve a held_exit_row_unknown verdict; omit both and the "
+            "layout decides."
         ),
     )
     assess.add_argument("--origin")
@@ -412,6 +439,7 @@ def _assess(args) -> dict:
         args.held_position,
         scanned[held_cabin].get("seats", []),
         scanned[held_cabin].get("exit_rows"),
+        args.held_exit_row,
     )
     common = {
         "flight": scanned[held_cabin].get("flight"),
