@@ -75,7 +75,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 `--held` is the seat currently assigned. `--held-cabin` is the cabin it is in. `--held-position` is `window`, `aisle` or `middle`; omit it and the column is read off the open seats in the same cabin. `--scan-up` sets how many cabins above the held one to include — the default and its cost are in `skills/expertflyer/scripts/expertflyer.py`.
 
-Get the held seat from byAir before calling this. It lives on the flight's booking info as `seat_number` and `seat_type`, written by `byair_update_booking_info`. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
+Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
 Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_upgrade`, `alert_recommended`, `cabins_scanned`, `cabins_absent` and `cabins_unscanned`.
 
@@ -107,11 +107,18 @@ Never report `optimal` as "nothing better exists". The sweep reads `cabins_scann
 - Ask the operator whether the seat is a window, an aisle or a middle.
 - Pass the answer as `--held-position`.
 
+**`held_exit_row_unknown`** — the service sent no exit-row layout, and whether the held seat sits in one decides the verdict.
+
+- Ask the operator whether the seat is in an exit row.
+- Relay `detail`. It names what beats the seat under each reading.
+
 **`error`** — go to Step 6.
 
 - `cabin_failed` names the cabin that did not load.
 
-`no_held_seat` and `held_position_unknown` exit non-zero. Neither is an answer about the seat. Report no verdict on either.
+`no_held_seat`, `held_position_unknown` and `held_exit_row_unknown` exit non-zero. None is an answer about the seat. Report no verdict on any of them.
+
+`held.isExitRow` is `null` when the service sent no layout. That is not `false`. A missing layout is read as an ordinary row only when both readings give the same answer.
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 

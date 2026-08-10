@@ -929,3 +929,68 @@ def test_a_sweep_reaching_the_top_leaves_nothing_unscanned(cabins):
         )
     )
     assert out["cabins_unscanned"] == []
+
+
+# --- the held seat's exit row, when the service sent no layout ----------------
+
+
+def test_a_missing_layout_leaves_the_held_exit_row_unknown(cabins):
+    """An absent `exit_rows` and one that excludes the row both render as
+    False otherwise, and they mean opposite things."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["held"]["isExitRow"] is None
+    assert out["held"]["exit_row_source"] is None
+
+
+def test_a_layout_that_excludes_the_row_is_a_real_false(cabins):
+    cabins["W"] = _cabin(
+        "W",
+        [{"label": "12A", "row": 12, "column": "A", "position": "window"}],
+        exit_rows=[30],
+    )
+    out = _assess(held="21F", held_position="window")
+    assert out["held"]["isExitRow"] is False
+    assert out["held"]["exit_row_source"] == "layout"
+
+
+def test_an_unknown_exit_row_is_answered_when_it_changes_nothing(cabins):
+    """Row 25 loses to the held seat either way, so the missing layout is not
+    load-bearing and the verdict stands."""
+    cabins["W"] = _cabin("W", [{"label": "25B", "row": 25, "column": "B", "position": "middle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+
+
+def test_an_unknown_exit_row_is_reported_when_it_decides_the_verdict(cabins):
+    """12A beats an ordinary 21F and loses to an exit-row 21F, so the answer
+    turns on the fact the service did not send."""
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_EXIT_ROW_UNKNOWN
+    assert "exit row" in out["detail"]
+    assert "12A" in out["detail"]
+    assert "upgrades" not in out
+
+
+def test_an_undecidable_exit_row_exits_non_zero(capsys, cabins):
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    code = client.main(
+        [
+            "assess",
+            "--airline",
+            "DL",
+            "--flight",
+            "2957",
+            "--date",
+            "2024-03-05",
+            "--held-cabin",
+            "W",
+            "--held",
+            "21F",
+            "--held-position",
+            "window",
+        ]
+    )
+    assert code == 1
+    assert "exit row" in capsys.readouterr().err

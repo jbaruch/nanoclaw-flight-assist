@@ -1,5 +1,15 @@
 # Changelog
 
+### Fixed — a missing exit-row layout no longer reads as "not an exit row"
+
+`assess` derived the held seat's `isExitRow` from the cabin's `exit_rows`, which the service sends only sometimes. An absent layout and one that excludes the row both rendered as `false`, and they mean opposite things: the second is evidence, the first is its absence.
+
+The direction of the error is what makes it worth a release. Everything else in this command overstates nothing; this one silently *demoted* the seat already held, so an open seat that loses to an exit-row 21F would be reported as an upgrade — advice to move to a worse seat. Caught on the first live run against the deployed service, where 21F came back `isExitRow: false` with no layout in the response.
+
+`isExitRow` is now `null` when the service sent no layout, with `exit_row_source` recording where the answer came from.
+
+The verdict settles the unknown only when it is load-bearing. `assess` ranks the open seats against both readings of the held seat; identical results mean the missing fact never mattered and the verdict stands. Different results produce `held_exit_row_unknown`, which exits non-zero and names what beats the seat under each reading, so the operator answers one question rather than reading a guess.
+
 ## 0.2.105 — 2026-08-10
 
 ### Added — `assess`, which judges the seat already held rather than the cabin around it

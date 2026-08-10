@@ -164,6 +164,19 @@ VERDICT_OPTIMAL = "optimal"
 VERDICT_UPGRADE = "upgrade"
 VERDICT_NO_HELD_SEAT = "no_held_seat"
 VERDICT_POSITION_UNKNOWN = "held_position_unknown"
+VERDICT_EXIT_ROW_UNKNOWN = "held_exit_row_unknown"
+
+
+def _upgrades_over(held: dict, open_seats, layout) -> list[dict]:
+    """Open seats that beat the held one, best first, each described."""
+    beats = [s for s in open_seats if seat_quality.is_upgrade(s, held, None, layout or None)]
+    ranked = seat_quality.rank_seats(beats, None, layout or None)
+    tiers = seat_quality.exit_tiers(beats, layout or None)
+    return [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
+
+
+def _reported_labels(upgrades) -> str:
+    return ", ".join(str(s.get("label")) for s in upgrades)
 
 
 def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_rows) -> dict:
@@ -189,7 +202,13 @@ def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_r
         "position": position,
         "position_source": source if position else None,
         "cabin": cabin,
-        "isExitRow": int(row) in {int(r) for r in (exit_rows or [])},
+        # None when the service sent no layout. An absent `exit_rows` and one
+        # that excludes this row both render as False otherwise, and the two
+        # mean opposite things: the second is evidence, the first is its
+        # absence. Reading absence as False demotes an exit row the operator
+        # holds, which reports a worse open seat as an upgrade.
+        "isExitRow": None if exit_rows is None else int(row) in {int(r) for r in exit_rows},
+        "exit_row_source": None if exit_rows is None else "layout",
     }
 
 
@@ -420,18 +439,35 @@ def _assess(args) -> dict:
     # Exit rows are numbered on the aircraft, not per cabin, so recline is
     # derived from every layout the sweep saw rather than one cabin's slice.
     layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
+    open_seats = [seat for response in scanned.values() for seat in response.get("seats", [])]
     try:
-        upgrades = [
-            seat
-            for response in scanned.values()
-            for seat in response.get("seats", [])
-            if seat_quality.is_upgrade(seat, held, None, layout or None)
-        ]
-        ranked = seat_quality.rank_seats(upgrades, None, layout or None)
-        tiers = seat_quality.exit_tiers(upgrades, layout or None)
-        held_tiers = seat_quality.exit_tiers([held], layout or None)
-        described = [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
-        held["why"] = seat_quality.describe(held, None, held_tiers)
+        described = _upgrades_over(held, open_seats, layout)
+        held["why"] = seat_quality.describe(
+            held, None, seat_quality.exit_tiers([held], layout or None)
+        )
+        # The layout was missing, so whether the held seat sits in an exit row
+        # is unknown. Settle it only when it changes the answer: rank against
+        # both readings, and report the ambiguity when they disagree.
+        if held["isExitRow"] is None:
+            either_way = [
+                _upgrades_over({**held, "isExitRow": claim}, open_seats, layout)
+                for claim in (True, False)
+            ]
+            if _reported_labels(either_way[0]) != _reported_labels(either_way[1]):
+                return {
+                    **common,
+                    "verdict": VERDICT_EXIT_ROW_UNKNOWN,
+                    "held": held,
+                    "detail": (
+                        f"the service sent no exit-row layout for {held_cabin}, so whether "
+                        f"seat {args.held!r} is in an exit row is unknown — and it decides the "
+                        f"verdict here: {_reported_labels(either_way[1]) or 'nothing'} beats it "
+                        f"if it is an ordinary row, {_reported_labels(either_way[0]) or 'nothing'} "
+                        "if it is an exit row. Ask the operator whether the seat is in an exit "
+                        "row, or re-run when the service reports the layout."
+                    ),
+                }
+            described = either_way[1]
     except seat_quality.SeatQualityError as exc:
         return {**common, "error": "unrankable", "detail": str(exc), "held": held}
 
@@ -494,7 +530,7 @@ def run(args) -> dict:
 # Verdicts that decline to answer. They are not service faults, but treating
 # them as success invites the caller to read a missing verdict as "nothing
 # better is open" — the exact misreport this command exists to prevent.
-UNANSWERED = frozenset({VERDICT_NO_HELD_SEAT, VERDICT_POSITION_UNKNOWN})
+UNANSWERED = frozenset({VERDICT_NO_HELD_SEAT, VERDICT_POSITION_UNKNOWN, VERDICT_EXIT_ROW_UNKNOWN})
 
 
 def main(argv=None) -> int:
