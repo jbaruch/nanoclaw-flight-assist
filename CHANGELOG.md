@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.2.111 — 2026-08-10
+### Changed — the held seat's cabin is resolved, not asked for
+
+byAir stores the seat and no cabin the assessment can use. Its `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the distinction the whole assessment turns on, and the one that had seat 21F judged against the wrong cabin.
+
+Asking the operator for it was the obvious repair and the wrong one. The cabin is a fact about the aircraft, and `rows` from `/seats` (jbaruch/expertflyer-api#20) already states it: every row of a cabin, sold out or not. `--held-cabin` is now optional, and omitting it resolves the cabin by reading from the bottom of the ladder up. Most seats are in the Main Cabin, so the common case costs one request, and the sweep reuses every response the resolution fetched.
+
+`held_cabin_from` reports `stated` or `resolved`, separately from `held_cabin_corroborated`, which reports how it was checked.
+
+A cabin boundary can fall mid-row — the 739's Comfort+ ends a row later on the right, which this repo already documented — so one row number belongs to two adjacent cabins. Resolution reads past the first match into the neighbour above to tell them apart; taking the first would hand a Comfort+ seat to the Main Cabin. Nothing further up the ladder can share a row, so the check costs one response the sweep usually fetches anyway.
+
+`held_cabin_unresolved` carries a `reason`, because the three ways resolution fails send the operator somewhere different: `shared_row` asks which cabin, `no_such_row` questions the seat and the flight, `rows_unavailable` means the service cannot answer. A service that reports no rows is a capability gap rather than an unusable argument, so it is an unanswered verdict rather than a `bad_request` that would have sent the agent into access diagnosis on a service that answered fine.
+
+A neighbour that did not answer is not evidence the row is unshared. An errored fetch, or one from a service that reports no rows, stops the resolution and says so rather than assigning the seat to the lower cabin off a failure — which at `--scan-up 0` the sweep would never fetch again to notice. A cabin the aircraft lacks is a real answer and does rule the split out.
+
+A row two cabins share, or a row no cabin on the aircraft holds, returns `held_cabin_unresolved` rather than a verdict. The seat or the flight is wrong, and assessing it against a guessed cabin is what this replaces. A service without `rows` cannot resolve, and says so rather than guessing.
 
 ### Fixed — a seat in a better cabin was reported as one to go and take
 

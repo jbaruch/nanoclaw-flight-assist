@@ -171,6 +171,13 @@ VERDICT_NO_HELD_SEAT = "no_held_seat"
 VERDICT_POSITION_UNKNOWN = "held_position_unknown"
 VERDICT_NOTHING_OPEN = "nothing_open"
 VERDICT_CABIN_MISMATCH = "held_cabin_mismatch"
+VERDICT_CABIN_UNRESOLVED = "held_cabin_unresolved"
+
+# Why the cabin could not be read off the layout. Each takes the operator
+# somewhere different, so the verdict alone does not say enough.
+REASON_SHARED_ROW = "shared_row"
+REASON_NO_SUCH_ROW = "no_such_row"
+REASON_ROWS_UNAVAILABLE = "rows_unavailable"
 
 
 def _has_row(response: dict, row: int) -> bool:
@@ -240,7 +247,14 @@ def parse_args(argv=None):
             "verdict: an open seat can only be better or worse than something."
         ),
     )
-    assess.add_argument("--held-cabin", required=True, help="e.g. 'comfort+', 'first', W")
+    assess.add_argument(
+        "--held-cabin",
+        help=(
+            "The cabin the held seat is in, e.g. 'comfort+', 'first', W. Omit "
+            "it and the cabin is resolved from the aircraft's own row extents, "
+            "which is what the operator would otherwise have to look up."
+        ),
+    )
     assess.add_argument(
         "--held-position",
         choices=("window", "aisle", "middle"),
@@ -362,19 +376,131 @@ def _assess(args) -> dict:
             ),
         }
     try:
-        held_cabin = seat_quality.cabin_code(args.held_cabin)
-        cabins = seat_quality.cabins_at_or_above(held_cabin, args.scan_up)
         row, column = seat_quality.parse_seat_label(args.held)
+        held_cabin = seat_quality.cabin_code(args.held_cabin) if args.held_cabin else None
     except seat_quality.SeatQualityError as exc:
         return {"error": "bad_request", "detail": str(exc)}
 
     scanned: dict[str, dict] = {}
     absent: list[str] = []
+    fetched: dict[str, dict] = {}
+
+    def fetch(cabin: str) -> dict:
+        if cabin not in fetched:
+            # `want=any`: the criteria filter shapes `matching`, and a
+            # comparison against the held seat has to see every open seat, not
+            # the subset that already matched a wanted position.
+            fetched[cabin] = _seats_in_cabin(args, cabin, "any")
+        return fetched[cabin]
+
+    def requested_so_far() -> list[str]:
+        """The cabins this run has asked for, best first.
+
+        Resolution has no planned list — finding the cabin is what it is for —
+        so the contract's `cabins_requested` is what it got through.
+        """
+        return sorted(fetched, key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True)
+
+    cabin_source = "stated"
+    if held_cabin is None:
+        # The seat's cabin is a fact about the aircraft, not something the
+        # operator should have to look up. `rows` is every row of a cabin, sold
+        # out or not, so the cabin holding this row can be found by reading
+        # from the bottom of the ladder up — where most seats are, so the
+        # common case costs one request.
+        cabin_source = "resolved"
+        holders: list[str] = []
+        for candidate in reversed(seat_quality.cabins_at_or_above(seat_quality.MAIN_CABIN, 4)):
+            response = fetch(candidate)
+            if "error" in response:
+                return {
+                    "error": response["error"],
+                    "detail": f"{candidate}: {response.get('detail', response['error'])}",
+                    "cabin_failed": candidate,
+                    "cabins_requested": requested_so_far(),
+                }
+            if response.get("cabin_present") is False:
+                absent.append(candidate)
+                continue
+            rows = response.get("rows")
+            if rows is None:
+                return {
+                    "verdict": VERDICT_CABIN_UNRESOLVED,
+                    "reason": REASON_ROWS_UNAVAILABLE,
+                    "cabins_absent": absent,
+                    "detail": (
+                        f"{candidate} reports no rows, so the cabin holding seat "
+                        f"{args.held!r} cannot be read off the layout. Pass --held-cabin."
+                    ),
+                }
+            if row in {int(r) for r in rows}:
+                holders.append(candidate)
+                # A cabin boundary can fall mid-row — the 739's Comfort+ ends a
+                # row later on the right — so one row number belongs to two
+                # ADJACENT cabins. Reading on past the first match is what
+                # tells them apart; anything further up cannot share this row.
+                above = seat_quality.cabins_above(candidate)
+                if not above:
+                    break
+                neighbour_cabin = above[-1]
+                neighbour = fetch(neighbour_cabin)
+                # A neighbour that did not answer is not evidence the row is
+                # unshared. Reading it that way assigns the seat to the lower
+                # cabin off a failure, and at --scan-up 0 the sweep never
+                # fetches it again to notice.
+                if "error" in neighbour:
+                    return {
+                        "error": neighbour["error"],
+                        "detail": (
+                            f"{neighbour_cabin}: {neighbour.get('detail', neighbour['error'])} "
+                            f"— read to check whether row {row} is shared with {candidate}"
+                        ),
+                        "cabin_failed": neighbour_cabin,
+                        "cabins_requested": requested_so_far(),
+                    }
+                if neighbour.get("cabin_present") is not False:
+                    if neighbour.get("rows") is None:
+                        return {
+                            "verdict": VERDICT_CABIN_UNRESOLVED,
+                            "reason": REASON_ROWS_UNAVAILABLE,
+                            "cabins_absent": absent,
+                            "detail": (
+                                f"{neighbour_cabin} reports no rows, so whether row {row} is "
+                                f"shared with {candidate} cannot be established. Pass "
+                                "--held-cabin."
+                            ),
+                        }
+                    if row in {int(r) for r in neighbour["rows"]}:
+                        holders.append(neighbour_cabin)
+                break
+        if len(holders) != 1:
+            return {
+                "verdict": VERDICT_CABIN_UNRESOLVED,
+                "reason": REASON_SHARED_ROW if holders else REASON_NO_SUCH_ROW,
+                "cabins_absent": absent,
+                "row_in_cabins": holders,
+                "detail": (
+                    (
+                        f"row {row} runs through {' and '.join(holders)} on this aircraft, so "
+                        f"which cabin holds seat {args.held!r} cannot be read off the layout"
+                    )
+                    if holders
+                    else (
+                        f"no cabin on this aircraft has a row {row}, so seat {args.held!r} is "
+                        "not on it — check the seat and the flight"
+                    )
+                )
+                + ". Pass --held-cabin to assess it against a named cabin.",
+            }
+        held_cabin = holders[0]
+
+    cabins = seat_quality.cabins_at_or_above(held_cabin, args.scan_up)
+    absent = [c for c in absent if c in cabins]
     for cabin in cabins:
         # `want=any`: the criteria filter shapes `matching`, and a comparison
         # against the held seat has to see every open seat, not the subset that
         # already matched a wanted position.
-        response = _seats_in_cabin(args, cabin, "any")
+        response = fetch(cabin)
         if "error" in response:
             # A cabin that failed to load could be holding the upgrade, so a
             # partial sweep must not report "nothing better is open".
@@ -417,6 +543,10 @@ def _assess(args) -> dict:
         # as "nothing anywhere on this aircraft beats your seat".
         "cabins_unscanned": seat_quality.cabins_above(cabins[0]),
         "seats_compared": len(open_seats),
+        # How the cabin was arrived at, distinct from how it was corroborated:
+        # "stated" came from --held-cabin, "resolved" was read off the row
+        # extents so the operator never had to know it.
+        "held_cabin_from": cabin_source,
         # Per cabin, how many open seats were worth taking at all. `optimal`
         # says nothing open beat the held seat; it never says the held seat
         # outranks a cabin. A cabin at 0 had nothing to beat it WITH, and that
@@ -625,6 +755,7 @@ UNANSWERED = frozenset(
         VERDICT_POSITION_UNKNOWN,
         VERDICT_NOTHING_OPEN,
         VERDICT_CABIN_MISMATCH,
+        VERDICT_CABIN_UNRESOLVED,
     }
 )
 

@@ -1343,3 +1343,305 @@ def test_nothing_is_recommended_when_every_watchable_cabin_has_a_seat(cabins):
     )
     assert out["alert_cabins"] == []
     assert out["alert_recommended"] is False
+
+
+# --- the cabin is resolved, not asked for ------------------------------------
+
+
+def test_the_cabin_is_read_off_the_aircraft_when_not_stated(cabins):
+    """byAir stores the seat and no cabin the assessment can use, so the
+    operator would otherwise have to look it up. `rows` already knows."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y",
+        [{"label": "22A", "row": 22, "column": "A", "position": "window"}],
+        list(range(16, 33)),
+        exit_rows=[19, 20, 21],
+    )
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "Y"
+    assert out["held_cabin_from"] == "resolved"
+    assert out["held_cabin_corroborated"] is True
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    # Main first — where most seats are — so the common case costs one request
+    # before the sweep, and the sweep reuses it.
+    assert cabins["_asked"] == ["Y", "W"]
+
+
+def test_resolution_walks_up_until_it_finds_the_row(cabins):
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(16, 33)))
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    cabins["A"] = _cabin_with_rows(
+        "A", [{"label": "6A", "row": 6, "column": "A", "position": "window"}], list(range(6, 10))
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "7C",
+                "--held-position",
+                "aisle",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "A"
+    assert out["held_cabin_from"] == "resolved"
+    assert cabins["_asked"][:3] == ["Y", "W", "A"]
+
+
+def test_a_stated_cabin_skips_resolution_entirely(cabins):
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 21)))
+    out = _assess(held="12F", held_position="window")
+    assert out["held_cabin_from"] == "stated"
+    assert "Y" not in cabins["_asked"]
+
+
+def test_a_seat_on_no_cabin_of_this_aircraft_is_reported(cabins):
+    """Row 88 is nobody's row: the seat or the flight is wrong."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(16, 33)))
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "88A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_NO_SUCH_ROW
+    assert "no cabin on this aircraft has a row 88" in out["detail"]
+    assert "upgrades" not in out
+
+
+def test_resolution_needs_the_service_to_report_rows(cabins):
+    """An older expertflyer-api cannot answer this, and guessing the cabin is
+    the defect the resolution exists to remove."""
+    cabins["Y"] = _cabin("Y", [{"label": "22A", "row": 22, "column": "A", "position": "window"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_ROWS_UNAVAILABLE
+    assert "--held-cabin" in out["detail"]
+
+
+def test_a_row_split_across_two_cabins_is_not_resolved_silently(cabins):
+    """A cabin boundary can fall mid-row — the 739's Comfort+ ends a row later
+    on the right — so bottom-up resolution would hand a Comfort+ seat to Main."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 12)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_SHARED_ROW
+    assert out["row_in_cabins"] == ["Y", "W"]
+    assert "runs through Y and W" in out["detail"]
+    assert "--held-cabin" in out["detail"]
+    assert "held" not in out
+
+
+def test_a_split_row_resolves_once_the_operator_names_the_cabin(cabins):
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = _cabin_with_rows(
+        "W", [{"label": "10C", "row": 10, "column": "C", "position": "aisle"}], [10, 11]
+    )
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-cabin",
+                "W",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "W"
+    assert out["held_cabin_from"] == "stated"
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+
+
+def test_a_row_in_one_cabin_only_still_resolves_without_asking(cabins):
+    """The neighbour is read to rule out a split, not to create ambiguity."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y", [{"label": "22A", "row": 22, "column": "A", "position": "window"}], list(range(16, 33))
+    )
+    cabins["W"] = _cabin_with_rows("W", [], list(range(10, 16)))
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "Y"
+    assert out["held_cabin_from"] == "resolved"
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+
+
+def test_a_neighbour_that_failed_is_not_evidence_the_row_is_unshared(cabins):
+    """Reading a failure as "not shared" assigns the seat to the lower cabin,
+    and at --scan-up 0 the sweep never fetches it again to notice."""
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = {"error": "blocked", "detail": "bot wall"}
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["error"] == "blocked"
+    assert out["cabin_failed"] == "W"
+    assert out["cabins_requested"] == ["W", "Y"]
+    assert "shared with Y" in out["detail"]
+    assert "verdict" not in out
+
+
+def test_a_neighbour_without_rows_cannot_rule_out_a_split(cabins):
+    cabins["Y"] = _cabin_with_rows("Y", [], list(range(11, 33)))
+    cabins["W"] = _cabin("W", [])  # older service: no `rows`
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_ROWS_UNAVAILABLE
+    assert "--held-cabin" in out["detail"]
+    assert "held" not in out
+
+
+def test_a_neighbour_the_aircraft_lacks_rules_out_the_split(cabins):
+    """An absent cabin is a real answer: it holds no rows at all."""
+    cabins["Y"] = _cabin_with_rows(
+        "Y", [{"label": "22A", "row": 22, "column": "A", "position": "window"}], list(range(11, 33))
+    )
+    cabins["W"] = _cabin("W", [], present=False)
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held",
+                "11A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["held"]["cabin"] == "Y"
+    assert out["held_cabin_from"] == "resolved"
