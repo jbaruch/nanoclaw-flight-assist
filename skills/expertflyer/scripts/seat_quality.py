@@ -104,6 +104,18 @@ def cabins_at_or_above(cabin: str, rungs: int) -> list[str]:
     return sorted(reachable, key=lambda c: CABIN_SCORE[c], reverse=True)
 
 
+def cabins_above(cabin: str) -> list[str]:
+    """Every cabin that outranks this one, best first.
+
+    What a sweep stopping at `cabin` did NOT look at. A verdict of "nothing
+    open beats the held seat" is only ever true of the cabins actually read,
+    so the ones left out have to be nameable.
+    """
+    score = CABIN_SCORE[cabin_code(cabin)]
+    above = [c for c, other in CABIN_SCORE.items() if other > score]
+    return sorted(above, key=lambda c: CABIN_SCORE[c], reverse=True)
+
+
 # A seat designator is a row number followed by a column letter — "21F", "1A".
 # Fully enumerable, unlike the free text elsewhere in a booking.
 _LABEL_RE = re.compile(r"^(\d{1,3})\s*([A-Z]{1,2})$")

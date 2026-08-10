@@ -77,15 +77,20 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. It lives on the flight's booking info as `seat_number` and `seat_type`, written by `byair_update_booking_info`. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_upgrade`, `alert_recommended`, `cabins_scanned` and `cabins_absent`.
+Outputs `verdict`, `held` (with `why` and `position_source`), `upgrades`, `best_upgrade`, `alert_recommended`, `cabins_scanned`, `cabins_absent` and `cabins_unscanned`.
+
+`cabins_scanned` is the whole evidence base. `cabins_unscanned` lists the cabins above the sweep that were never read; widen it with `--scan-up`.
 
 Report `verdict` as it comes. Do not re-derive it from `upgrades`:
 
-**`optimal`** — nothing open beats the held seat.
+**`optimal`** — nothing open in `cabins_scanned` beats the held seat.
 
-- Say so.
+- Say so, naming the cabins in `cabins_scanned`.
 - Name `held.why`.
+- Name `cabins_unscanned` as not checked, when it is non-empty.
 - Offer the alert (Step 5) on the cabins in `cabins_scanned`.
+
+Never report `optimal` as "nothing better exists". The sweep reads `cabins_scanned` and stops. A cabin in `cabins_unscanned` may hold a better seat and was never looked at.
 
 **`upgrade`** — something open beats it.
 
@@ -130,7 +135,7 @@ Then run Step 3 once per flight, adding `--date-fallback`. Read `date_fallback_a
 Report only the flights that need something:
 
 - `upgrade` → name the flight and `best_upgrade`
-- `optimal` → one line that the seat holds up, or nothing when the operator asked only for problems
+- `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
 - `no_held_seat` or `held_position_unknown` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks
 

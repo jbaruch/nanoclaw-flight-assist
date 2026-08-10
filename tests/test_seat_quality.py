@@ -539,3 +539,10 @@ def test_anything_worth_taking_beats_a_middle_already_held():
         sq.is_upgrade({"label": "40B", "row": 40, "position": "middle", "cabin": Y}, held_middle)
         is False
     )
+
+
+def test_the_cabins_a_sweep_stopped_short_of_are_nameable():
+    """A verdict of 'nothing open beats it' is only true of what was read."""
+    assert sq.cabins_above(W) == [F, C, A]
+    assert sq.cabins_above(F) == []
+    assert sq.cabins_above(Y) == [F, C, A, W]

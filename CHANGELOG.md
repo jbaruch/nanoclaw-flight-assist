@@ -8,6 +8,8 @@ The seat pass answered a different question from the one asked. "Make sure I hav
 
 The sweep walks up the cabin ladder rather than reading one cabin. A single-cabin check structurally cannot see a Comfort+ window opening while the operator sits in Main, which is the upgrade most worth reporting. `--scan-up` sets the width, because each rung is another request to a bot-walled service.
 
+`optimal` is scoped to the cabins actually read, never to the aircraft. A one-rung sweep from the Main Cabin never looks at Delta One, so "nothing open beats your seat" would be a claim the sweep did not establish — the same overstatement in a new place. `cabins_unscanned` names what was skipped, and the skill reports it alongside the verdict.
+
 Absence of the held seat is a refusal, not a fallback. `no_held_seat` and `held_position_unknown` exit non-zero and carry no `upgrades` field. Answering the cabin-scan question when the comparison could not be made is how the original wrong answer got reported as a confident one.
 
 The held seat is never in the service's response — it is occupied, by the operator — so it is reconstructed. Row and column come from the designator, exit-row membership from the cabin's layout, and position from `--held-position` when stated or from the columns of the open seats beside it when not. `position_source` records which. A column two open seats disagree about is dropped rather than resolved: a cabin running 2-2 forward and 3-3 behind makes one letter both a window and a middle, and picking one decides the operator is in a seat they are not in.

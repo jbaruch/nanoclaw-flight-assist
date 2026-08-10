@@ -876,3 +876,56 @@ def test_a_held_middle_with_only_middles_open_stays_optimal(cabins):
     out = _assess(held="13B", held_position="middle")
     assert out["verdict"] == client.VERDICT_OPTIMAL
     assert out["alert_recommended"] is True
+
+
+def test_optimal_names_the_cabins_it_never_looked_at(cabins):
+    """A one-rung sweep from Main cannot see Business, so `optimal` scoped to
+    the whole aircraft would be a false verdict."""
+    cabins["Y"] = _cabin("Y", [])
+    cabins["W"] = _cabin("W", [])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "30A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert out["cabins_scanned"] == ["W", "Y"]
+    assert out["cabins_unscanned"] == ["F", "C", "A"]
+
+
+def test_a_sweep_reaching_the_top_leaves_nothing_unscanned(cabins):
+    cabins["F"] = _cabin("F", [])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2714",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "first",
+                "--held",
+                "1A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["cabins_unscanned"] == []

@@ -399,6 +399,10 @@ def _assess(args) -> dict:
         "route": scanned[held_cabin].get("route"),
         "cabins_scanned": sorted(scanned, key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True),
         "cabins_absent": absent,
+        # `optimal` is only ever true of the cabins actually read. Naming the
+        # ones the sweep stopped short of keeps the verdict from being heard
+        # as "nothing anywhere on this aircraft beats your seat".
+        "cabins_unscanned": seat_quality.cabins_above(cabins[0]),
     }
     if held["position"] is None:
         return {
@@ -433,6 +437,7 @@ def _assess(args) -> dict:
 
     return {
         **common,
+        # `optimal` is scoped to `cabins_scanned`, never to the whole aircraft.
         "verdict": VERDICT_UPGRADE if described else VERDICT_OPTIMAL,
         "held": held,
         "upgrades": described,
