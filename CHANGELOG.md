@@ -16,6 +16,14 @@ Also replaced future-date literals in the client tests with fixed past dates (#2
 
 The seats step then had two directives that could disagree. `matching` is the service's own filter and can list a seat the ranking refuses — a middle, for `--want middle` or `--want any` — so an agent following both would report a seat as open AND treat nothing as worth taking. The availability and alert decision now reads `best` / `acceptable_total` alone, with `cabin_present` handled first and `matching` demoted to informational. Prose script references are repo-relative, which also corrected an older one for the client itself.
 
+### Fixed — the exit-row recline tier is derived from the cabin layout (#249)
+
+Ranking distinguished a reclining exit row from a fixed-back one by reading a `reclines` field that the seat map does not carry. The deployed service returns `isExitRow` and `row` and no recline signal, so the distinction never fired and both exit rows ranked identically — on a Main Cabin flight the skill could have pointed at the fixed-back row.
+
+It is now read off geometry. An exit row cannot recline when another exit row sits directly behind it, which is precisely why the forward row of a pair is fixed and the second is the one worth having. A lone exit row has nothing behind it and reclines.
+
+Adjacency is a property of the cabin rather than of one seat, so tiers are computed across every seat in the response — including the middles ranking then drops, since a middle in the row behind still fixes the row in front. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
+
 ## 0.2.98 — 2026-08-10
 
 ### Fixed — the ExpertFlyer client default bypassed the OneCLI gateway (#229)
