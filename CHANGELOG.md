@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.108 — 2026-08-10
+
 ### Added — the held seat's cabin is now checked, not assumed
 
 `expertflyer-api` #20 landed `rows` on `/seats`: every row of the cabin holding a real seat, sold out or not. That settles a question this plugin could previously only guess at.
