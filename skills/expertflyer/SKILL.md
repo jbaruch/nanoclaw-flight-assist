@@ -77,7 +77,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
-Do not ask for the cabin. Never read one out of byAir: its `seat_class` does not distinguish Comfort+ from Main Cabin. Omit `--held-cabin` and the cabin is resolved from the aircraft. `held_cabin_from` reports `stated` or `resolved`.
+Do not ask for the cabin. Never read one out of byAir. Omit `--held-cabin` and the cabin is resolved from the aircraft. `held_cabin_from` reports `stated` or `resolved`.
 
 Pass `--held-cabin` only when the operator names a cabin themselves, or when a response asks for it.
 
@@ -87,7 +87,7 @@ Responses carrying `error` and `detail` instead of a `verdict`:
 2. `unrankable` — a seat the ranking refused. Step 6 covers it.
 3. any service fault, with `cabin_failed` and `cabins_requested` naming the cabin that did not load. Go to Step 6.
 
-`verdict: "no_held_seat"` carries `verdict` and `detail` alone; `held_cabin_unresolved` adds `cabins_absent` and `row_in_cabins`. Neither carries `held`.
+`verdict: "no_held_seat"` carries `verdict` and `detail` alone. `held_cabin_unresolved` adds `reason` and `cabins_absent`, plus `row_in_cabins` on every reason but `rows_unavailable`. Neither carries `held`.
 
 Every other response carries `verdict`, `held`, `cabins_scanned`, `cabins_absent`, `cabins_unscanned`, `seats_compared`, `held_cabin_from` and `held_cabin_corroborated`. `held` carries `why` on every shape except `held_position_unknown`, which has no position to describe.
 
@@ -130,11 +130,12 @@ Never say the held seat beat a cabin. `optimal` compares it against the seats th
 - Get the seat from byAir, or from the operator.
 - Report nothing about seat quality.
 
-**`held_cabin_unresolved`** — the layout does not say which cabin holds that row.
+**`held_cabin_unresolved`** — the layout does not say which cabin holds that row. `reason` says why.
 
-- Relay `detail`. It names the cabins the row runs through, or says none does.
-- Ask the operator for the cabin when `row_in_cabins` names more than one.
-- Check the seat and the flight with the operator when `row_in_cabins` is empty.
+- Relay `detail`.
+- `shared_row` — ask the operator which cabin, naming those in `row_in_cabins`.
+- `no_such_row` — check the seat and the flight with the operator.
+- `rows_unavailable` — ask the operator for the cabin.
 - Re-run with `--held-cabin`.
 - Report nothing about seat quality.
 

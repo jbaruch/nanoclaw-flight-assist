@@ -173,6 +173,12 @@ VERDICT_NOTHING_OPEN = "nothing_open"
 VERDICT_CABIN_MISMATCH = "held_cabin_mismatch"
 VERDICT_CABIN_UNRESOLVED = "held_cabin_unresolved"
 
+# Why the cabin could not be read off the layout. Each takes the operator
+# somewhere different, so the verdict alone does not say enough.
+REASON_SHARED_ROW = "shared_row"
+REASON_NO_SUCH_ROW = "no_such_row"
+REASON_ROWS_UNAVAILABLE = "rows_unavailable"
+
 
 def _has_row(response: dict, row: int) -> bool:
     """Whether any bookable seat in this cabin's response sits in `row`."""
@@ -419,10 +425,12 @@ def _assess(args) -> dict:
             rows = response.get("rows")
             if rows is None:
                 return {
-                    "error": "bad_request",
+                    "verdict": VERDICT_CABIN_UNRESOLVED,
+                    "reason": REASON_ROWS_UNAVAILABLE,
+                    "cabins_absent": absent,
                     "detail": (
-                        "the service does not report a cabin's rows, so the cabin holding "
-                        f"seat {args.held!r} cannot be resolved — pass --held-cabin"
+                        f"{candidate} reports no rows, so the cabin holding seat "
+                        f"{args.held!r} cannot be read off the layout. Pass --held-cabin."
                     ),
                 }
             if row in {int(r) for r in rows}:
@@ -453,11 +461,13 @@ def _assess(args) -> dict:
                 if neighbour.get("cabin_present") is not False:
                     if neighbour.get("rows") is None:
                         return {
-                            "error": "bad_request",
+                            "verdict": VERDICT_CABIN_UNRESOLVED,
+                            "reason": REASON_ROWS_UNAVAILABLE,
+                            "cabins_absent": absent,
                             "detail": (
                                 f"{neighbour_cabin} reports no rows, so whether row {row} is "
-                                f"shared with {candidate} cannot be established — pass "
-                                "--held-cabin"
+                                f"shared with {candidate} cannot be established. Pass "
+                                "--held-cabin."
                             ),
                         }
                     if row in {int(r) for r in neighbour["rows"]}:
@@ -466,6 +476,7 @@ def _assess(args) -> dict:
         if len(holders) != 1:
             return {
                 "verdict": VERDICT_CABIN_UNRESOLVED,
+                "reason": REASON_SHARED_ROW if holders else REASON_NO_SUCH_ROW,
                 "cabins_absent": absent,
                 "row_in_cabins": holders,
                 "detail": (

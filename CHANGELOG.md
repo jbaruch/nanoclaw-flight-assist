@@ -10,6 +10,8 @@ Asking the operator for it was the obvious repair and the wrong one. The cabin i
 
 A cabin boundary can fall mid-row — the 739's Comfort+ ends a row later on the right, which this repo already documented — so one row number belongs to two adjacent cabins. Resolution reads past the first match into the neighbour above to tell them apart; taking the first would hand a Comfort+ seat to the Main Cabin. Nothing further up the ladder can share a row, so the check costs one response the sweep usually fetches anyway.
 
+`held_cabin_unresolved` carries a `reason`, because the three ways resolution fails send the operator somewhere different: `shared_row` asks which cabin, `no_such_row` questions the seat and the flight, `rows_unavailable` means the service cannot answer. A service that reports no rows is a capability gap rather than an unusable argument, so it is an unanswered verdict rather than a `bad_request` that would have sent the agent into access diagnosis on a service that answered fine.
+
 A neighbour that did not answer is not evidence the row is unshared. An errored fetch, or one from a service that reports no rows, stops the resolution and says so rather than assigning the seat to the lower cabin off a failure — which at `--scan-up 0` the sweep would never fetch again to notice. A cabin the aircraft lacks is a real answer and does rule the split out.
 
 A row two cabins share, or a row no cabin on the aircraft holds, returns `held_cabin_unresolved` rather than a verdict. The seat or the flight is wrong, and assessing it against a guessed cabin is what this replaces. A service without `rows` cannot resolve, and says so rather than guessing.

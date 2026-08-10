@@ -1441,6 +1441,7 @@ def test_a_seat_on_no_cabin_of_this_aircraft_is_reported(cabins):
         )
     )
     assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_NO_SUCH_ROW
     assert "no cabin on this aircraft has a row 88" in out["detail"]
     assert "upgrades" not in out
 
@@ -1466,7 +1467,8 @@ def test_resolution_needs_the_service_to_report_rows(cabins):
             ]
         )
     )
-    assert out["error"] == "bad_request"
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_ROWS_UNAVAILABLE
     assert "--held-cabin" in out["detail"]
 
 
@@ -1493,6 +1495,7 @@ def test_a_row_split_across_two_cabins_is_not_resolved_silently(cabins):
         )
     )
     assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_SHARED_ROW
     assert out["row_in_cabins"] == ["Y", "W"]
     assert "runs through Y and W" in out["detail"]
     assert "--held-cabin" in out["detail"]
@@ -1609,9 +1612,10 @@ def test_a_neighbour_without_rows_cannot_rule_out_a_split(cabins):
             ]
         )
     )
-    assert out["error"] == "bad_request"
+    assert out["verdict"] == client.VERDICT_CABIN_UNRESOLVED
+    assert out["reason"] == client.REASON_ROWS_UNAVAILABLE
     assert "--held-cabin" in out["detail"]
-    assert "verdict" not in out
+    assert "held" not in out
 
 
 def test_a_neighbour_the_aircraft_lacks_rules_out_the_split(cabins):
