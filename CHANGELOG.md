@@ -30,7 +30,7 @@ Without a TripIt `uid` the dedupe key carries route and departure as well as car
 
 Input faults are reported, never raised: a malformed `--now`, a schedule whose root is a valid JSON scalar rather than a list, a file that cannot be read or is not UTF-8, and an unparseable event timestamp each produce structured JSON on stdout with an actionable stderr diagnostic. A single bad timestamp skips its own event rather than losing the whole schedule, exactly as an unparseable summary does.
 
-One known edge is handled in code rather than in prose: the schedule stamps UTC, so a late-evening local departure falls on the next UTC day and the service finds no such flight. The client retries the previous day itself and reports `date_fallback_applied` when it did, since fixed branching belongs in the script rather than in agent judgement. Only an unresolved route triggers it — an auth failure is not a date problem. `--no-date-fallback` suppresses it.
+One known edge is handled in code rather than in prose: the schedule stamps UTC, so a late-evening local departure falls on the next UTC day and the service finds no such flight. The client retries the previous day itself and reports `date_fallback_applied` when it did, since fixed branching belongs in the script rather than in agent judgement. Only an unresolved route triggers it — an auth failure is not a date problem. When the retry itself fails, its own error is returned rather than the first one, so an expired session does not surface as "no such flight"; `date_fallback_attempted` records that the retry happened. `--no-date-fallback` suppresses it.
 
 ## 0.2.98 — 2026-08-10
 

@@ -187,9 +187,14 @@ def run(args) -> dict:
         if _looks_like_wrong_date(result) and not args.no_date_fallback:
             fallback = _previous_day(args.date)
             retried = seats_on(fallback)
+            # Report the retry's own outcome. Returning the first error instead
+            # would hide what actually went wrong the second time — an expired
+            # session or an unreachable service reported as "no such flight".
             if "error" not in retried:
                 retried["date_fallback_applied"] = fallback
-                return _rank(retried)
+            else:
+                retried["date_fallback_attempted"] = fallback
+            return _rank(retried)
         return _rank(result)
     if args.action == "fare-class":
         return _request(

@@ -399,3 +399,23 @@ def test_a_successful_first_try_is_not_retried(monkeypatch):
     )
     assert calls == ["2024-03-07"]
     assert "date_fallback_applied" not in out
+
+
+def test_a_failed_retry_reports_its_own_error_not_the_first_one(monkeypatch):
+    """An expired session on the retry must not surface as "no such flight"."""
+
+    def fake(method, path, params=None, body=None):
+        if params["date"] == "2024-03-07":
+            return {"error": "error", "detail": "could not resolve a route for DL9"}
+        return {"error": "auth", "detail": "session expired"}
+
+    monkeypatch.setattr(client, "_request", fake)
+    out = client.run(
+        client.parse_args(
+            ["seats", "--airline", "DL", "--flight", "9", "--date", "2024-03-07", "--cabin", "W"]
+        )
+    )
+    assert out["error"] == "auth"
+    assert out["detail"] == "session expired"
+    assert out["date_fallback_attempted"] == "2024-03-06"
+    assert "date_fallback_applied" not in out

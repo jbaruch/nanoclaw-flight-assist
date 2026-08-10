@@ -72,7 +72,7 @@ Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origi
 
 - `best` set → name the seat and say it is open, so the operator can take it in the airline's app
 - `best` null and `cabin_present` true → offer the alert (Step 4)
-- `cabin_present` false → skip the flight silently; the cabin does not exist on that aircraft
+- `cabin_present` false → skip the flight silently
 
 Say nothing about a flight whose cabin is absent from the aircraft. Every other flight gets one of the two lines above.
 
