@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.102 — 2026-08-10
+
 ### Added — review seats across upcoming flights (#229)
 
 `skills/expertflyer/scripts/upcoming-flights.py` turns the travel schedule into the seat pass's work list: which flights are coming up, and how to name them to the ExpertFlyer service. It performs no network call — the skill runs it, then runs the per-flight seat check.
