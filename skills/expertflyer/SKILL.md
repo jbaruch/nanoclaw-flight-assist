@@ -25,7 +25,7 @@ Outputs `flight`, `seats`, `available`, `display_capped`, `alternatives` (other 
 
 `seats: 0` means the bucket exists and is empty — an answer, not a missing value. `display_capped: true` means *at least* that many. Codeshares are excluded by default because inventory lives on the operating carrier; pass `--include-codeshares` to see them.
 
-Report the count plainly. When `available` is true, say so and **do not** offer an alert. When false, name any `alternatives` and offer the alert (Step 3).
+Report the count plainly. When `available` is true, say so and **do not** offer an alert. When false, name any `alternatives` and offer the alert (Step 4).
 
 Finish here unless the operator accepts the alert.
 
@@ -51,15 +51,38 @@ Decide on `best` and `acceptable_total`, never on `matching`. Ranking drops seat
 
 1. `cabin_present` is false — the aircraft has no such cabin. Say so. Offer no alert; a cabin that does not exist can never open.
 2. `best` is set — name it and say it is open. Offer no alert.
-3. `best` is `null` — nothing in the cabin is worth taking, whatever `available_total` says. Offer the alert (Step 3).
+3. `best` is `null` — nothing in the cabin is worth taking, whatever `available_total` says. Offer the alert (Step 4).
 
 Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
 Finish here unless the operator accepts the alert.
 
-## Step 3 — Create an alert
+## Step 3 — Review seats on upcoming flights
 
-Only after Step 1 or Step 2 reported the wanted thing absent, or the operator explicitly asked for the alert regardless.
+For "make sure I have the best seats", or after a new booking appears.
+
+```bash
+python3 /home/node/.claude/skills/tessl__expertflyer/scripts/upcoming-flights.py \
+    --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+Outputs `{"flights": [{airline, flight, origin, destination, date, departs_utc, summary, uid}], "count": N}`, soonest first, excluding departures inside the next 12 hours — by then check-in has assigned a seat and moving rarely helps.
+
+Then run Step 2 once per flight, passing its `airline`, `flight`, `date`, `origin` and `destination`, with the cabin the operator flies (`comfort+` unless they say otherwise). Apply Step 2's decision rules per flight and report only the flights that need something:
+
+- `best` set → name the seat and say it is open, so the operator can take it in the airline's app
+- `best` null and `cabin_present` true → offer the alert (Step 4)
+- `cabin_present` false → skip the flight silently; the cabin does not exist on that aircraft
+
+Say nothing about a flight where the cabin is absent or the operator already has the best available seat — a per-flight report with nothing to act on is noise.
+
+If the service reports the flight is not found on that date, retry once with the previous day. The schedule stamps UTC, so a late-evening local departure lands on the next UTC day.
+
+Finish here unless the operator accepts an alert.
+
+## Step 4 — Create an alert
+
+Only after Step 1, 2 or 3 reported the wanted thing absent, or the operator explicitly asked for the alert regardless.
 
 ```bash
 # Seat alert — needs --cabin and --want
@@ -73,7 +96,7 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py crea
     --origin JFK --destination AMS --class Z
 ```
 
-Route is required here; Steps 1 and 2 both report it. Outputs `{"created": true, "alert_id": ..., "status": "ACTIVE", "verified_in_account": true}`.
+Route is required here; Steps 1, 2 and 3 all report it. Outputs `{"created": true, "alert_id": ..., "status": "ACTIVE", "verified_in_account": true}`.
 
 The service refuses to duplicate an active alert of the same kind on the same flight and class, returning `{"created": false, "reason": "already_exists", "alert_id": ...}`. A seat alert and a fare-class alert on one flight are different watches, so having one never blocks the other. Relay the refusal; do not retry with `--force` unless the operator asks.
 
@@ -81,7 +104,7 @@ The service refuses to duplicate an active alert of the same kind on the same fl
 
 Finish here.
 
-## Step 4 — Diagnose access
+## Step 5 — Diagnose access
 
 Run when any step above reports an `error` field.
 

@@ -16,6 +16,18 @@ Also replaced future-date literals in the client tests with fixed past dates (#2
 
 The seats step then had two directives that could disagree. `matching` is the service's own filter and can list a seat the ranking refuses — a middle, for `--want middle` or `--want any` — so an agent following both would report a seat as open AND treat nothing as worth taking. The availability and alert decision now reads `best` / `acceptable_total` alone, with `cabin_present` handled first and `matching` demoted to informational. Prose script references are repo-relative, which also corrected an older one for the client itself.
 
+### Added — review seats across upcoming flights (#229)
+
+`skills/expertflyer/scripts/upcoming-flights.py` turns the travel schedule into the seat pass's work list: which flights are coming up, and how to name them to the ExpertFlyer service. It performs no network call — the skill runs it, then runs the per-flight seat check.
+
+Departures inside the next 12 hours are skipped. By then check-in has assigned a seat and moving rarely helps, so reporting them is noise.
+
+The reference instant is injected with `--now` rather than read from the clock, so the suite does not rot as the real date advances. A summary that does not parse is skipped rather than guessed at — better to miss a flight than to invent a flight number from prose like "Rebooked - see email". Re-synced duplicates collapse on the stable TripIt `uid`.
+
+The new skill step reports only flights that need something: a seat worth taking, or an empty cabin worth watching. A flight where the cabin does not exist on the aircraft, or where nothing better is open, is passed over silently.
+
+One known edge is documented rather than papered over: the schedule stamps UTC, so a late-evening local departure falls on the next UTC day. The step retries once with the previous day when the service reports the flight missing on the computed date.
+
 ## 0.2.98 — 2026-08-10
 
 ### Fixed — the ExpertFlyer client default bypassed the OneCLI gateway (#229)

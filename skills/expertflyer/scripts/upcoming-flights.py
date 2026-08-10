@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""List upcoming flights worth a seat check, from the travel schedule.
+
+The seat pass needs a work list: which flights exist, and how to name them to
+the ExpertFlyer service. That extraction is deterministic — parse the schedule,
+drop anything that is not an upcoming flight, and shape what remains — so it
+belongs in a script rather than in agent judgement.
+
+This performs no network call. The skill runs it to get the list, then runs
+`expertflyer.py seats` per flight.
+
+The reference time is injected with `--now`, never read from the clock, so a
+test that passes today passes every day.
+
+Output: one JSON object on stdout. Exit non-zero on failure.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+SCHEDULE_PATH = "/workspace/group/travel-schedule.json"
+FLIGHT_TYPE = "Flight"
+
+# "DL2957 ATL to YYZ" — the carrier and number may or may not be spaced.
+SUMMARY_RE = re.compile(r"^\s*([A-Z]{2})\s?(\d{1,4})\s+([A-Z]{3})\s+to\s+([A-Z]{3})\s*$")
+
+# A departure inside this window is too close to act on: seats bought now
+# rarely beat what check-in already assigned.
+MIN_LEAD_HOURS = 12
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Upcoming flights for a seat check.")
+    p.add_argument("--schedule", default=SCHEDULE_PATH)
+    p.add_argument(
+        "--now",
+        required=True,
+        help="Reference instant, ISO-8601 UTC. Injected so the output is deterministic.",
+    )
+    p.add_argument(
+        "--min-lead-hours",
+        type=int,
+        default=MIN_LEAD_HOURS,
+        help="Skip departures sooner than this many hours away.",
+    )
+    return p.parse_args(argv)
+
+
+def _parse_instant(value: str) -> datetime:
+    text = value.strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def flight_from_event(event: dict) -> dict | None:
+    """Shape one schedule event into a flight, or None when it is not one."""
+    if event.get("type") != FLIGHT_TYPE:
+        return None
+    match = SUMMARY_RE.match(str(event.get("summary", "")))
+    if not match:
+        return None
+    airline, number, origin, destination = match.groups()
+    start = event.get("start")
+    if not start:
+        return None
+    departs = _parse_instant(str(start))
+    return {
+        "airline": airline,
+        "flight": number,
+        "origin": origin,
+        "destination": destination,
+        # The schedule stamps UTC. A departure late in the local evening can
+        # fall on the next UTC day, so the service's own status lookup is the
+        # authority on the operating date — see the skill's fallback note.
+        "date": departs.date().isoformat(),
+        "departs_utc": departs.isoformat().replace("+00:00", "Z"),
+        "summary": event.get("summary"),
+        "uid": event.get("uid"),
+    }
+
+
+def upcoming_flights(events, now: datetime, min_lead_hours: int) -> list[dict]:
+    """Flights departing far enough ahead to be worth acting on, soonest first."""
+    cutoff = now + timedelta(hours=min_lead_hours)
+    found: dict[str, dict] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        flight = flight_from_event(event)
+        if flight is None:
+            continue
+        if _parse_instant(flight["departs_utc"]) < cutoff:
+            continue
+        # The same segment can appear twice across a re-synced schedule; the
+        # uid is stable, so last write wins rather than double-reporting.
+        found[str(flight["uid"] or f"{flight['airline']}{flight['flight']}{flight['date']}")] = (
+            flight
+        )
+    return sorted(found.values(), key=lambda f: f["departs_utc"])
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    path = Path(args.schedule)
+    if not path.is_file():
+        print(json.dumps({"error": "no_schedule", "detail": f"{path} not found"}))
+        print(
+            f"upcoming-flights: {path} not found — the nightly sync writes it; "
+            "run tessl__nightly-travel-sync first",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        events = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        print(json.dumps({"error": "bad_schedule", "detail": str(exc)}))
+        print(f"upcoming-flights: {path} is not valid JSON — {exc}", file=sys.stderr)
+        return 1
+
+    if isinstance(events, dict):
+        events = events.get("events") or events.get("items") or []
+
+    flights = upcoming_flights(events, _parse_instant(args.now), args.min_lead_hours)
+    print(json.dumps({"flights": flights, "count": len(flights)}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
