@@ -77,6 +77,10 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py asse
 
 Get the held seat from byAir before calling this. `byair_get_flight` returns it as `seatNumber` and `seatType` — camelCase on read, where `byair_update_booking_info` takes `seat_number` and `seat_type` on write. When byAir has no seat for the flight, ask the operator for it, write it back to byAir, then call this. Never infer the seat from a previous conversation.
 
+byAir carries no cabin the assessment can use. Its `seat_class` is business, premium economy or economy, and Comfort+ and Main Cabin are both economy — the one distinction `--held-cabin` exists to make. Ask the operator for the cabin in the names Step 2 lists, and never read it back out of byAir.
+
+One ask covers both: the seat and the cabin it is in. A seat without a cabin cannot be assessed, so asking for the seat alone buys a second round trip.
+
 Responses carrying `error` and `detail` instead of a `verdict`:
 
 1. `bad_request` — an unusable argument, such as an unrecognised cabin or a seat that is not a designator. `cabins_absent` rides along when the aircraft has no such cabin.
@@ -123,7 +127,8 @@ Never say the held seat beat a cabin. `optimal` compares it against the seats th
 
 **`no_held_seat`** — no seat was passed.
 
-- Get it from byAir, or from the operator.
+- Get the seat from byAir, or from the operator.
+- Get the cabin from the operator.
 - Report nothing about seat quality.
 
 **`held_position_unknown`** — the seat map does not say what the column is.
@@ -171,7 +176,7 @@ The pass covers the next trip. `--trips N` widens it to the next N; `--trips 0` 
 
 `count: 0` with a non-empty `excluded` means no upcoming trip covers those flights. Report that rather than reporting nothing.
 
-Collect the held seat for every flight in one exchange before assessing any of them. Read each from byAir. Ask the operator once, in a single message, for every flight byAir has no seat for. Write each answer back to byAir.
+Collect the held seat and cabin for every flight in one exchange before assessing any of them. Read each seat from byAir. Ask the operator once, in a single message, for every flight byAir has no seat for, and for the cabin on every flight — byAir does not carry one the assessment can use. Write the seats back to byAir. Do not write the cabins.
 
 Then run Step 3 once per flight, adding `--date-fallback`. Read `date_fallback_applied` to see which date answered. Do not pass it in Step 3 for a date the operator named.
 

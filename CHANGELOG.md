@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.2.111 — 2026-08-10
+### Changed — the seat ask covers the cabin too, and byAir is not asked for it
+
+byAir stores the seat and not the cabin the assessment needs. Its `seat_class` is business, premium economy or economy, so Comfort+ and Main Cabin are both economy — the one distinction `--held-cabin` exists to make, and the one that had seat 21F assessed against the wrong cabin.
+
+Reading a cabin back out of that field would round-trip a value that cannot tell those two apart, so the skill does not write it and does not read it. The cabin is asked for in the names Step 2 lists, and the row-extent check verifies the answer.
+
+The ask now covers seat and cabin together. A seat without a cabin cannot be assessed, so asking for the seat alone only bought a second round trip.
 
 ### Fixed — a seat in a better cabin was reported as one to go and take
 
