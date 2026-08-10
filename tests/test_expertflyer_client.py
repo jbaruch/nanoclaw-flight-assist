@@ -15,6 +15,7 @@ import importlib.util
 import json
 import ssl
 import urllib.error
+import urllib.parse
 from io import BytesIO
 from pathlib import Path
 
@@ -578,3 +579,281 @@ def test_an_unrankable_response_exits_non_zero(capture, capsys):
     )
     assert code == 1
     assert "porthole" in capsys.readouterr().err
+
+
+# --- assess: the held seat versus everything open ----------------------------
+
+
+@pytest.fixture
+def cabins(monkeypatch):
+    """Answer each /seats call with the payload for the cabin it asked about.
+
+    `assess` sweeps more than one cabin, so a single canned response cannot
+    express the case it exists for: a better cabin holding the upgrade.
+    """
+    by_cabin: dict[str, dict] = {}
+    asked: list[str] = []
+
+    def fake_urlopen(request, timeout=None):
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+        cabin = query["cabin"][0]
+        asked.append(cabin)
+        return _Response(by_cabin.get(cabin, {"cabin_present": False, "cabin": cabin}))
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv(client.URL_ENV, "http://service:8090")
+    by_cabin["_asked"] = asked  # type: ignore[assignment]
+    return by_cabin
+
+
+def _cabin(code, seats, *, exit_rows=None, present=True):
+    payload = {
+        "cabin": code,
+        "cabin_present": present,
+        "seats": [{**s, "cabin": code} for s in seats],
+        "available_total": len(seats),
+        "flight": "DL2957",
+        "route": "ATL-YYZ",
+    }
+    if exit_rows is not None:
+        payload["exit_rows"] = exit_rows
+    return payload
+
+
+def _assess(**overrides):
+    argv = [
+        "assess",
+        "--airline",
+        "DL",
+        "--flight",
+        "2957",
+        "--date",
+        "2024-03-05",
+        "--held-cabin",
+        "W",
+    ]
+    for flag, value in overrides.items():
+        if value is None:
+            continue
+        argv += [f"--{flag.replace('_', '-')}", str(value)]
+    return client.run(client.parse_args(argv))
+
+
+def test_assess_without_a_held_seat_refuses_to_answer(cabins):
+    """The failure this command exists to prevent: reporting on open seats as
+    though it had judged the operator's own."""
+    out = _assess()
+    assert out["verdict"] == client.VERDICT_NO_HELD_SEAT
+    assert "--held" in out["detail"]
+    assert "upgrades" not in out
+    assert cabins["_asked"] == []
+
+
+def test_assess_without_a_held_seat_exits_non_zero(capsys, cabins):
+    code = client.main(
+        [
+            "assess",
+            "--airline",
+            "DL",
+            "--flight",
+            "2957",
+            "--date",
+            "2024-03-05",
+            "--held-cabin",
+            "W",
+        ]
+    )
+    assert code == 1
+    assert "--held" in capsys.readouterr().err
+
+
+def test_a_window_stays_optimal_when_only_middles_are_open(cabins):
+    """The live DL2957 case: 21F held, 13B the one open Comfort+ seat."""
+    cabins["W"] = _cabin("W", [{"label": "13B", "row": 13, "column": "B", "position": "middle"}])
+    cabins["A"] = _cabin("A", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert out["upgrades"] == []
+    assert out["best_upgrade"] is None
+    assert out["alert_recommended"] is True
+    assert out["cabins_absent"] == ["A"]
+
+
+def test_a_better_cabin_is_reported_as_the_upgrade(cabins):
+    """The case a single-cabin check structurally cannot see."""
+    cabins["Y"] = _cabin("Y", [{"label": "30C", "row": 30, "column": "C", "position": "aisle"}])
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "30A",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_UPGRADE
+    assert out["best_upgrade"] == "12A (window)"
+    assert out["alert_recommended"] is False
+    assert out["cabins_scanned"] == ["W", "Y"]
+
+
+def test_a_comfort_plus_window_never_upgrades_the_first_seat_held(cabins):
+    """1A on DL2714, with Comfort+ open further back. The ladder decides."""
+    cabins["F"] = _cabin("F", [{"label": "3C", "row": 3, "column": "C", "position": "aisle"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2714",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "first",
+                "--held",
+                "1A",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert cabins["_asked"] == ["F"]
+
+
+def test_the_held_position_is_read_off_the_seat_map_when_not_stated(cabins):
+    cabins["W"] = _cabin(
+        "W",
+        [
+            {"label": "25F", "row": 25, "column": "F", "position": "window"},
+            {"label": "14B", "row": 14, "column": "B", "position": "middle"},
+        ],
+    )
+    out = _assess(held="21F")
+    assert out["held"]["position"] == "window"
+    assert out["held"]["position_source"] == "seat-map"
+    # 25F is the same column four rows back, so it settles what F is without
+    # being worth moving to.
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+
+
+def test_a_stated_position_is_not_overridden_by_the_seat_map(cabins):
+    cabins["W"] = _cabin("W", [{"label": "12F", "row": 12, "column": "F", "position": "window"}])
+    out = _assess(held="21F", held_position="aisle")
+    assert out["held"]["position"] == "aisle"
+    assert out["held"]["position_source"] == "stated"
+
+
+def test_an_underivable_position_is_reported_rather_than_guessed(cabins):
+    """No open seat shares the column, so the seat map says nothing about it."""
+    cabins["W"] = _cabin("W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}])
+    out = _assess(held="21F")
+    assert out["verdict"] == client.VERDICT_POSITION_UNKNOWN
+    assert "--held-position" in out["detail"]
+    assert "upgrades" not in out
+
+
+def test_an_underivable_position_exits_non_zero(capsys, cabins):
+    cabins["W"] = _cabin("W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}])
+    code = client.main(
+        [
+            "assess",
+            "--airline",
+            "DL",
+            "--flight",
+            "2957",
+            "--date",
+            "2024-03-05",
+            "--held-cabin",
+            "W",
+            "--held",
+            "21F",
+        ]
+    )
+    assert code == 1
+    assert "--held-position" in capsys.readouterr().err
+
+
+def test_the_held_exit_row_comes_from_the_cabin_layout(cabins):
+    """21F is an exit row, so a plain window further forward does not beat it."""
+    cabins["W"] = _cabin(
+        "W",
+        [{"label": "12A", "row": 12, "column": "A", "position": "window"}],
+        exit_rows=[21],
+    )
+    out = _assess(held="21F", held_position="window")
+    assert out["held"]["isExitRow"] is True
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert "exit row" in out["held"]["why"]
+
+
+def test_a_cabin_that_failed_to_load_is_not_reported_as_nothing_better(cabins):
+    """A cabin that errored could be holding the upgrade."""
+    cabins["W"] = _cabin("W", [])
+    cabins["A"] = {"error": "blocked", "detail": "bot wall"}
+    out = _assess(held="21F", held_position="window")
+    assert out["error"] == "blocked"
+    assert out["cabin_failed"] == "A"
+    assert "verdict" not in out
+
+
+def test_a_held_cabin_the_aircraft_lacks_is_a_bad_request(cabins):
+    cabins["W"] = _cabin("W", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["error"] == "bad_request"
+    assert "no W cabin" in out["detail"]
+
+
+def test_an_unknown_held_cabin_never_reaches_the_service(cabins):
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "sky club",
+                "--held",
+                "21F",
+            ]
+        )
+    )
+    assert out["error"] == "bad_request"
+    assert cabins["_asked"] == []
+
+
+def test_scan_width_controls_how_many_cabins_are_requested(cabins):
+    cabins["W"] = _cabin("W", [])
+    out = _assess(held="21F", held_position="window", scan_up=0)
+    assert cabins["_asked"] == ["W"]
+    assert out["cabins_scanned"] == ["W"]
+
+
+def test_an_unanswerable_position_still_names_the_seat_and_cabin(cabins):
+    """The operator is asked about a specific seat, so the refusal identifies
+    it rather than reporting a bare column."""
+    cabins["W"] = _cabin("W", [{"label": "14B", "row": 14, "column": "B", "position": "middle"}])
+    held = _assess(held="21F")["held"]
+    assert held["label"] == "21F"
+    assert held["cabin"] == "W"
+    assert held["position"] is None
+    assert held["position_source"] is None

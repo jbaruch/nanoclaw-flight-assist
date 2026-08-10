@@ -1,5 +1,23 @@
 # Changelog
 
+### Added — `assess`, which judges the seat already held rather than the cabin around it
+
+The seat pass answered a different question from the one asked. "Make sure I have the best seats" ran a cabin scan, which reports what is open; whether any of it beats the seat already assigned is a comparison the scan never made. The agent made it by eye instead, and got it backwards — it reasoned that a Main Cabin exit row was equivalent to Comfort+, contradicting the ranker's own documented rule, because nothing forced the comparison through code.
+
+`expertflyer.py assess` takes the held seat and returns a verdict: `optimal`, `upgrade` with the seat named, or a refusal. `is_upgrade()` — written for this and until now called by nothing outside its tests — is what decides it.
+
+The sweep walks up the cabin ladder rather than reading one cabin. A single-cabin check structurally cannot see a Comfort+ window opening while the operator sits in Main, which is the upgrade most worth reporting. `--scan-up` sets the width, because each rung is another request to a bot-walled service.
+
+Absence of the held seat is a refusal, not a fallback. `no_held_seat` and `held_position_unknown` exit non-zero and carry no `upgrades` field. Answering the cabin-scan question when the comparison could not be made is how the original wrong answer got reported as a confident one.
+
+The held seat is never in the service's response — it is occupied, by the operator — so it is reconstructed. Row and column come from the designator, exit-row membership from the cabin's layout, and position from `--held-position` when stated or from the columns of the open seats beside it when not. `position_source` records which. A column two open seats disagree about is dropped rather than resolved: a cabin running 2-2 forward and 3-3 behind makes one letter both a window and a middle, and picking one decides the operator is in a seat they are not in.
+
+A cabin that fails to load aborts the assessment. That cabin could be holding the upgrade, so a partial sweep must never report that nothing better is open.
+
+Step 4 collects every held seat in one exchange before assessing any flight, and names the flights that came back unanswered. A flight whose verdict never arrived is not a flight with good seats.
+
+The held seat lives on byAir's booking info as `seat_number` / `seat_type`. Reading it there keeps one store rather than a local copy that drifts from what the byAir app shows.
+
 ## 0.2.104 — 2026-08-10
 
 ### Fixed — First, Delta One and Premium Select ranked below Comfort+

@@ -31,6 +31,8 @@ is that exchange rate.
 
 from __future__ import annotations
 
+import re
+
 # Comfort+ beats an exit row: it buys forward position AND leg room, where an
 # exit row buys only leg room.
 CABIN_OUTRANKS_EXIT = True
@@ -84,6 +86,65 @@ NOT_EXIT = 0
 
 class SeatQualityError(ValueError):
     """A seat that cannot be ranked, rather than one ranked badly."""
+
+
+def cabins_at_or_above(cabin: str, rungs: int) -> list[str]:
+    """The held cabin plus the `rungs` cabins above it, best first.
+
+    A seat check that reads only the cabin already occupied cannot see the
+    Comfort+ window that opened while the operator sits in Main — the whole
+    class of upgrade worth interrupting for. Walking the ladder is what makes
+    that visible, and each rung costs one more request to a bot-walled
+    service, so the width is the caller's to choose.
+    """
+    if rungs < 0:
+        raise SeatQualityError(f"rungs must be zero or more, got {rungs}")
+    held = CABIN_SCORE[cabin_code(cabin)]
+    reachable = [c for c, score in CABIN_SCORE.items() if held <= score <= held + rungs]
+    return sorted(reachable, key=lambda c: CABIN_SCORE[c], reverse=True)
+
+
+# A seat designator is a row number followed by a column letter — "21F", "1A".
+# Fully enumerable, unlike the free text elsewhere in a booking.
+_LABEL_RE = re.compile(r"^(\d{1,3})\s*([A-Z]{1,2})$")
+
+
+def parse_seat_label(label: str) -> tuple[int, str]:
+    """Row and column from a seat designator, e.g. '21F' -> (21, 'F')."""
+    match = _LABEL_RE.match(str(label).strip().upper())
+    if not match:
+        raise SeatQualityError(
+            f"{label!r} is not a seat designator — pass a row and column like 21F or 1A"
+        )
+    return int(match.group(1)), match.group(2)
+
+
+def column_positions(seats) -> dict[str, str]:
+    """Column letter to position, read off the cabin's own bookable seats.
+
+    The service reports open seats only, so the seat already held is never in
+    the list and its position cannot be looked up directly. It can be derived:
+    the aircraft states what column F is on every open seat in the same cabin.
+
+    A column reported as two different positions is dropped rather than
+    resolved — a cabin whose forward rows are 2-2 and rear rows 3-3 makes the
+    same letter a window and a middle, and picking one would decide the
+    operator is in a seat they are not in.
+    """
+    seen: dict[str, str | None] = {}
+    for seat in seats:
+        column = seat.get("column")
+        if not column:
+            continue
+        position = seat.get("position")
+        if position not in POSITION_SCORE and position not in EXCLUDED_POSITIONS:
+            continue
+        key = str(column).strip().upper()
+        if key in seen and seen[key] != position:
+            seen[key] = None
+        else:
+            seen[key] = str(position)
+    return {column: position for column, position in seen.items() if position}
 
 
 def is_acceptable(seat: dict) -> bool:

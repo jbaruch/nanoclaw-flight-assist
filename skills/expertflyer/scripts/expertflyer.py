@@ -154,6 +154,45 @@ def _rank(result: dict) -> dict:
     return result
 
 
+# How far up the cabin ladder to look by default. Each rung is one more request
+# to a bot-walled service, and one rung already covers the case a single-cabin
+# check structurally cannot see: a Comfort+ seat opening while the operator
+# sits in Main.
+DEFAULT_SCAN_RUNGS = 1
+
+VERDICT_OPTIMAL = "optimal"
+VERDICT_UPGRADE = "upgrade"
+VERDICT_NO_HELD_SEAT = "no_held_seat"
+VERDICT_POSITION_UNKNOWN = "held_position_unknown"
+
+
+def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_rows) -> dict:
+    """The seat already occupied, shaped so it can be ranked against open ones.
+
+    The service reports bookable seats, so the held seat is absent from every
+    response by definition — it is occupied, by the operator. Its row and
+    column come from the designator; whether it is an exit row comes from the
+    cabin's layout; its position is either stated or read off the columns of
+    the open seats around it.
+    """
+    row, column = seat_quality.parse_seat_label(label)
+    source = "stated"
+    if position is None:
+        position = seat_quality.column_positions(cabin_seats).get(column)
+        source = "seat-map"
+    return {
+        "label": f"{row}{column}",
+        "row": row,
+        "column": column,
+        # None when the column is stated nowhere the sweep can read. The caller
+        # reports that rather than ranking a seat whose position it invented.
+        "position": position,
+        "position_source": source if position else None,
+        "cabin": cabin,
+        "isExitRow": int(row) in {int(r) for r in (exit_rows or [])},
+    }
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Query the ExpertFlyer API service.")
     sub = p.add_subparsers(dest="action", required=True)
@@ -177,6 +216,42 @@ def parse_args(argv=None):
             "must report that, not seats from another day's flight."
         ),
     )
+
+    assess = sub.add_parser("assess", help="Judge the held seat against everything open")
+    assess.add_argument("--airline", required=True)
+    assess.add_argument("--flight", required=True)
+    assess.add_argument("--date", required=True, help="YYYY-MM-DD")
+    assess.add_argument(
+        "--held",
+        help=(
+            "The seat currently assigned, e.g. 21F. Without it there is no "
+            "verdict: an open seat can only be better or worse than something."
+        ),
+    )
+    assess.add_argument("--held-cabin", required=True, help="e.g. 'comfort+', 'first', W")
+    assess.add_argument(
+        "--held-position",
+        choices=("window", "aisle", "middle"),
+        help=(
+            "Whether the held seat is a window, an aisle or a middle. Omit it "
+            "and the column is read off the open seats in the same cabin; that "
+            "fails when no open seat shares the column, which reports "
+            "held_position_unknown rather than guessing."
+        ),
+    )
+    assess.add_argument(
+        "--scan-up",
+        type=int,
+        default=DEFAULT_SCAN_RUNGS,
+        help=(
+            "How many cabins above the held one to include. Each is one more "
+            f"request to a bot-walled service. Default {DEFAULT_SCAN_RUNGS}; "
+            "0 checks the held cabin alone."
+        ),
+    )
+    assess.add_argument("--origin")
+    assess.add_argument("--destination")
+    assess.add_argument("--date-fallback", action="store_true")
 
     fare = sub.add_parser("fare-class", help="Fare-class inventory for a flight")
     fare.add_argument("--origin", required=True)
@@ -207,50 +282,172 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+def _seats_in_cabin(args, cabin: str, want: str) -> dict:
+    """One cabin's bookable seats, with the schedule-date retry applied.
+
+    Shared by `seats` and `assess`: the previous-day retry is a property of a
+    schedule-derived date, not of which command asked.
+    """
+
+    def seats_on(date: str) -> dict:
+        return _request(
+            "GET",
+            "/seats",
+            {
+                "airline": args.airline,
+                "flight": args.flight,
+                "date": date,
+                "cabin": cabin,
+                "want": want,
+                "origin": args.origin,
+                "destination": args.destination,
+            },
+        )
+
+    result = seats_on(args.date)
+    # Opt-in only. The retry is sound when the date came from the UTC
+    # schedule; against a date the operator named it would answer about a
+    # different day's flight and present it as the requested one.
+    if not (_looks_like_wrong_date(result) and args.date_fallback):
+        return result
+    try:
+        fallback = _previous_day(args.date)
+    except ValueError:
+        return {
+            "error": "bad_request",
+            "detail": (
+                f"--date {args.date!r} is not YYYY-MM-DD, so the "
+                "previous-day retry cannot be computed — pass the "
+                "departure date as e.g. 2026-08-31"
+            ),
+        }
+    retried = seats_on(fallback)
+    # Report the retry's own outcome. Returning the first error instead
+    # would hide what actually went wrong the second time — an expired
+    # session or an unreachable service reported as "no such flight".
+    if "error" not in retried:
+        retried["date_fallback_applied"] = fallback
+    else:
+        retried["date_fallback_attempted"] = fallback
+    return retried
+
+
+def _assess(args) -> dict:
+    """Judge the seat already held against everything open worth moving to.
+
+    This is the question the operator actually asks — "are my seats the best"
+    — and it is not the one a cabin scan answers. A cabin scan reports what is
+    open; only a comparison against the held seat reports whether any of it is
+    better. Without the held seat there is no verdict to give, so the absence
+    is reported rather than answered around.
+    """
+    if not args.held:
+        return {
+            "verdict": VERDICT_NO_HELD_SEAT,
+            "detail": (
+                "no seat given, so nothing can be called better or worse than it — "
+                "pass --held with the seat currently assigned, e.g. --held 21F"
+            ),
+        }
+    try:
+        held_cabin = seat_quality.cabin_code(args.held_cabin)
+        cabins = seat_quality.cabins_at_or_above(held_cabin, args.scan_up)
+        row, column = seat_quality.parse_seat_label(args.held)
+    except seat_quality.SeatQualityError as exc:
+        return {"error": "bad_request", "detail": str(exc)}
+
+    scanned: dict[str, dict] = {}
+    absent: list[str] = []
+    for cabin in cabins:
+        # `want=any`: the criteria filter shapes `matching`, and a comparison
+        # against the held seat has to see every open seat, not the subset that
+        # already matched a wanted position.
+        response = _seats_in_cabin(args, cabin, "any")
+        if "error" in response:
+            # A cabin that failed to load could be holding the upgrade, so a
+            # partial sweep must not report "nothing better is open".
+            return {
+                "error": response["error"],
+                "detail": f"{cabin}: {response.get('detail', response['error'])}",
+                "cabin_failed": cabin,
+                "cabins_requested": cabins,
+            }
+        if response.get("cabin_present") is False:
+            absent.append(cabin)
+            continue
+        scanned[cabin] = response
+
+    if held_cabin not in scanned:
+        return {
+            "error": "bad_request",
+            "detail": (
+                f"the aircraft has no {held_cabin} cabin, so seat {args.held!r} "
+                "cannot be in it — check the cabin the operator actually flies"
+            ),
+            "cabins_absent": absent,
+        }
+
+    held = _held_seat(
+        args.held,
+        held_cabin,
+        args.held_position,
+        scanned[held_cabin].get("seats", []),
+        scanned[held_cabin].get("exit_rows"),
+    )
+    common = {
+        "flight": scanned[held_cabin].get("flight"),
+        "route": scanned[held_cabin].get("route"),
+        "cabins_scanned": sorted(scanned, key=lambda c: seat_quality.CABIN_SCORE[c], reverse=True),
+        "cabins_absent": absent,
+    }
+    if held["position"] is None:
+        return {
+            **common,
+            "verdict": VERDICT_POSITION_UNKNOWN,
+            "held": held,
+            "detail": (
+                f"seat {args.held!r} is a {held_cabin} seat in column {column} of row {row}, "
+                f"and no open seat in that cabin sits in column {column} — so whether it is a "
+                "window, an aisle or a middle cannot be read off the seat map. Pass "
+                "--held-position window|aisle|middle."
+            ),
+        }
+
+    # Exit rows are numbered on the aircraft, not per cabin, so recline is
+    # derived from every layout the sweep saw rather than one cabin's slice.
+    layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
+    try:
+        upgrades = [
+            seat
+            for response in scanned.values()
+            for seat in response.get("seats", [])
+            if seat_quality.is_upgrade(seat, held, None, layout or None)
+        ]
+        ranked = seat_quality.rank_seats(upgrades, None, layout or None)
+        tiers = seat_quality.exit_tiers(upgrades, layout or None)
+        held_tiers = seat_quality.exit_tiers([held], layout or None)
+        described = [{**s, "why": seat_quality.describe(s, None, tiers)} for s in ranked]
+        held["why"] = seat_quality.describe(held, None, held_tiers)
+    except seat_quality.SeatQualityError as exc:
+        return {**common, "error": "unrankable", "detail": str(exc), "held": held}
+
+    return {
+        **common,
+        "verdict": VERDICT_UPGRADE if described else VERDICT_OPTIMAL,
+        "held": held,
+        "upgrades": described,
+        "best_upgrade": described[0]["why"] if described else None,
+        # Nothing open beats the held seat, so watching is the only move left.
+        # A seat worth taking is taken now, not watched.
+        "alert_recommended": not described,
+    }
+
+
 def run(args) -> dict:
     if args.action == "seats":
-
-        def seats_on(date: str) -> dict:
-            return _request(
-                "GET",
-                "/seats",
-                {
-                    "airline": args.airline,
-                    "flight": args.flight,
-                    "date": date,
-                    "cabin": args.cabin,
-                    "want": args.want,
-                    "origin": args.origin,
-                    "destination": args.destination,
-                },
-            )
-
-        result = seats_on(args.date)
-        # Opt-in only. The retry is sound when the date came from the UTC
-        # schedule; against a date the operator named it would answer about a
-        # different day's flight and present it as the requested one.
-        if _looks_like_wrong_date(result) and args.date_fallback:
-            try:
-                fallback = _previous_day(args.date)
-            except ValueError:
-                return {
-                    "error": "bad_request",
-                    "detail": (
-                        f"--date {args.date!r} is not YYYY-MM-DD, so the "
-                        "previous-day retry cannot be computed — pass the "
-                        "departure date as e.g. 2026-08-31"
-                    ),
-                }
-            retried = seats_on(fallback)
-            # Report the retry's own outcome. Returning the first error instead
-            # would hide what actually went wrong the second time — an expired
-            # session or an unreachable service reported as "no such flight".
-            if "error" not in retried:
-                retried["date_fallback_applied"] = fallback
-            else:
-                retried["date_fallback_attempted"] = fallback
-            return _rank(retried)
-        return _rank(result)
+        return _rank(_seats_in_cabin(args, args.cabin, args.want))
+    if args.action == "assess":
+        return _assess(args)
     if args.action == "fare-class":
         return _request(
             "GET",
@@ -289,11 +486,17 @@ def run(args) -> dict:
     raise ValueError(f"unknown action {args.action!r}")
 
 
+# Verdicts that decline to answer. They are not service faults, but treating
+# them as success invites the caller to read a missing verdict as "nothing
+# better is open" — the exact misreport this command exists to prevent.
+UNANSWERED = frozenset({VERDICT_NO_HELD_SEAT, VERDICT_POSITION_UNKNOWN})
+
+
 def main(argv=None) -> int:
     result = run(parse_args(argv))
     print(json.dumps(result))
-    if "error" in result:
-        print(f"expertflyer: {result.get('detail', result['error'])}", file=sys.stderr)
+    if "error" in result or result.get("verdict") in UNANSWERED:
+        print(f"expertflyer: {result.get('detail', result.get('error'))}", file=sys.stderr)
         return 1
     return 0
 
