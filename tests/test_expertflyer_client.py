@@ -309,3 +309,38 @@ def test_a_response_without_seats_is_left_alone():
     """Older service versions return only `matching`; do not invent fields."""
     old = {"matching": ["12A"], "available_total": 1}
     assert client._rank(dict(old)) == old
+
+
+def test_rank_labels_the_reclining_exit_row_on_the_production_path():
+    """Service seats carry no recline field; the tier comes from adjacency.
+
+    Exercises _rank() rather than describe() directly — the earlier test passed
+    tiers by hand and so could not catch the production call omitting them.
+    """
+    payload = {
+        "cabin": "Y",
+        "seats": [
+            {
+                "label": "20A",
+                "row": 20,
+                "column": "A",
+                "position": "window",
+                "isExitRow": True,
+                "cabin": "Y",
+            },
+            {
+                "label": "21A",
+                "row": 21,
+                "column": "A",
+                "position": "window",
+                "isExitRow": True,
+                "cabin": "Y",
+            },
+        ],
+        "available_total": 2,
+    }
+    out = client._rank(payload)
+    assert out["best"] == "21A (window, exit row, reclines)"
+    assert out["ranked"][0]["why"] == "21A (window, exit row, reclines)"
+    # The row in front is fixed-back precisely because 21 sits behind it.
+    assert out["ranked"][1]["why"] == "20A (window, exit row)"

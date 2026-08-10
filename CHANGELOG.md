@@ -22,6 +22,8 @@ Ranking distinguished a reclining exit row from a fixed-back one by reading a `r
 
 It is now read off geometry. An exit row cannot recline when another exit row sits directly behind it, which is precisely why the forward row of a pair is fixed and the second is the one worth having. A lone exit row has nothing behind it and reclines.
 
+The ranked output carries the derived tier through to its description too: the client computes the tiers once and passes them to both ranking and rendering, so a derived reclining row reads as `21A (window, exit row, reclines)` rather than a bare `exit row`.
+
 Adjacency is a property of the cabin rather than of one seat, so tiers are computed across every seat in the response — including the middles ranking then drops, since a middle in the row behind still fixes the row in front. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
 
 ## 0.2.98 — 2026-08-10
