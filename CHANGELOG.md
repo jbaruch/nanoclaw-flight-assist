@@ -1,5 +1,19 @@
 # Changelog
 
+### Fixed — seat-ranking defects found in review, and the ranking is now actually wired (#229)
+
+Three blocking findings from the policy reviewer on #248, all real:
+
+`is_upgrade()` took one `cabin` argument and applied it to both seats, so the documented rule that Comfort+ outranks a Main Cabin exit row was unreachable — the comparison that made cross-cabin ranking worth having could not be expressed. Each seat now resolves its own cabin from the `cabin` the service stamps on it, with the caller's value as fallback, and a seat with neither raises rather than being guessed at.
+
+`describe()` prepended `row` to `label` and rendered `1414B` against the real service response, whose label is already row-qualified. `seat_label()` now accepts both shapes — the service's `14B` and the raw payload's column-only `B` beside a `row`.
+
+The ranking module was never invoked: the skill still reported the service's unranked `matching`, so none of the advertised behaviour could occur. The client now ranks the `seats` response and adds `ranked`, `best`, and `acceptable_total`. `acceptable_total` can be `0` while `available_total` is not — a middle is never offered, so DL2957's Comfort+ cabin, whose single free seat is a middle in row 14, correctly yields nothing.
+
+Also replaced future-date literals in the client tests with fixed past dates (#246 finding): the HTTP layer is mocked, so no live upstream rejects a past date and the Live-Upstream Future-Date carve-out does not apply.
+
+The seats step then had two directives that could disagree. `matching` is the service's own filter and can list a seat the ranking refuses — a middle, for `--want middle` or `--want any` — so an agent following both would report a seat as open AND treat nothing as worth taking. The availability and alert decision now reads `best` / `acceptable_total` alone, with `cabin_present` handled first and `matching` demoted to informational. Prose script references are repo-relative, which also corrected an older one for the client itself.
+
 ## 0.2.98 — 2026-08-10
 
 ### Fixed — the ExpertFlyer client default bypassed the OneCLI gateway (#229)

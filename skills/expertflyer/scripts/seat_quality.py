@@ -102,7 +102,24 @@ def _cabin_rank(cabin: str) -> int:
     return 1 if cabin == COMFORT_PLUS else 0
 
 
-def seat_sort_key(seat: dict, cabin: str) -> tuple:
+def seat_cabin(seat: dict, fallback: str | None = None) -> str:
+    """The seat's own cabin, falling back to the caller's.
+
+    The service stamps `cabin` on each seat. Comparing two seats therefore has
+    to read each one's own cabin — a single shared argument cannot express
+    "Comfort+ outranks a Main Cabin exit row", which is the rule that made
+    cross-cabin comparison worth having.
+    """
+    cabin = seat.get("cabin") or fallback
+    if not cabin:
+        raise SeatQualityError(
+            f"seat {seat.get('label')!r} carries no cabin and none was supplied — "
+            "cabin decides rank, so guessing it would silently mis-order"
+        )
+    return str(cabin)
+
+
+def seat_sort_key(seat: dict, cabin: str | None = None) -> tuple:
     """Sort key for one seat; higher tuples are better seats.
 
     Position and row trade off rather than one dominating: a window counts as
@@ -110,40 +127,56 @@ def seat_sort_key(seat: dict, cabin: str) -> tuple:
     lower row number sorts higher. The raw position breaks exact ties, which
     is what makes a window exactly WINDOW_WORTH_ROWS back beat the aisle.
     """
+    resolved = seat_cabin(seat, cabin)
     position = POSITION_SCORE[_position(seat)]
-    exit_tier = _exit_tier(seat, cabin)
+    exit_tier = _exit_tier(seat, resolved)
     row = int(seat["row"])
 
     effective_row = row - WINDOW_WORTH_ROWS if _position(seat) == "window" else row
-    cabin_key = _cabin_rank(cabin) if CABIN_OUTRANKS_EXIT else 0
+    cabin_key = _cabin_rank(resolved) if CABIN_OUTRANKS_EXIT else 0
     return (cabin_key, exit_tier, -effective_row, position)
 
 
-def rank_seats(seats, cabin: str) -> list[dict]:
+def rank_seats(seats, cabin: str | None = None) -> list[dict]:
     """Acceptable seats, best first. Middles are dropped, never ranked last."""
     usable = [s for s in seats if is_acceptable(s)]
     return sorted(usable, key=lambda s: seat_sort_key(s, cabin), reverse=True)
 
 
-def best_seat(seats, cabin: str) -> dict | None:
+def best_seat(seats, cabin: str | None = None) -> dict | None:
     ranked = rank_seats(seats, cabin)
     return ranked[0] if ranked else None
 
 
-def describe(seat: dict, cabin: str) -> str:
+def seat_label(seat: dict) -> str:
+    """Full seat designator, whichever shape the caller supplies.
+
+    The service reports `label` already row-qualified ("14B"); the raw
+    seat-map payload reports the column alone ("B") with `row` beside it.
+    Concatenating blindly renders "1414B".
+    """
+    label = str(seat.get("label", ""))
+    row = str(seat.get("row", ""))
+    if label.startswith(row) and label != row:
+        return label
+    column = seat.get("column") or label
+    return f"{row}{column}"
+
+
+def describe(seat: dict, cabin: str | None = None) -> str:
     """Short human label, e.g. '13A (window, exit row)'."""
     bits = [_position(seat)]
-    tier = _exit_tier(seat, cabin)
+    tier = _exit_tier(seat, seat_cabin(seat, cabin))
     if tier == EXIT_RECLINE:
         bits.append("exit row, reclines")
     elif tier == EXIT_NO_RECLINE:
         bits.append("exit row")
     if seat.get("isBulkhead"):
         bits.append("bulkhead")
-    return f"{seat['row']}{seat['label']} ({', '.join(bits)})"
+    return f"{seat_label(seat)} ({', '.join(bits)})"
 
 
-def is_upgrade(candidate: dict, current: dict | None, cabin: str) -> bool:
+def is_upgrade(candidate: dict, current: dict | None, cabin: str | None = None) -> bool:
     """True when `candidate` is strictly better than the seat already held.
 
     Used for the watch case: only worth interrupting the operator when the
@@ -153,4 +186,6 @@ def is_upgrade(candidate: dict, current: dict | None, cabin: str) -> bool:
         return False
     if current is None:
         return True
+    # Each seat resolves its OWN cabin: the candidate may be Comfort+ while the
+    # held seat is Main, which is exactly the comparison worth making.
     return seat_sort_key(candidate, cabin) > seat_sort_key(current, cabin)

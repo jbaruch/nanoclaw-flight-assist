@@ -1,5 +1,9 @@
 """Contract of the ExpertFlyer API client.
 
+Dates here are fixed PAST dates on purpose: the HTTP layer is mocked, so no
+live upstream rejects a past-dated search and the Live-Upstream Future-Date
+carve-out does not apply. A future literal would only rot.
+
 The browser layer, the credential and every parsing rule live in the
 `expertflyer-api` service and are tested there. What matters here is that this
 container builds the right request, relays the service's verdict without
@@ -72,7 +76,7 @@ def test_seats_builds_the_query(capture):
                 "--flight",
                 "2957",
                 "--date",
-                "2026-08-11",
+                "2024-03-05",
                 "--cabin",
                 "comfort+",
                 "--want",
@@ -90,7 +94,7 @@ def test_omitted_route_is_not_sent_as_empty(capture):
     """The service resolves the route itself; empty params would override that."""
     client.run(
         client.parse_args(
-            ["seats", "--airline", "DL", "--flight", "2957", "--date", "2026-08-11", "--cabin", "W"]
+            ["seats", "--airline", "DL", "--flight", "2957", "--date", "2024-03-05", "--cabin", "W"]
         )
     )
     assert "origin=" not in capture["url"]
@@ -107,7 +111,7 @@ def test_fare_class_sends_the_class_alias(capture):
                 "--destination",
                 "AMS",
                 "--date",
-                "2026-08-31",
+                "2024-03-19",
                 "--airline",
                 "KL",
                 "--class",
@@ -133,7 +137,7 @@ def test_create_alert_posts_a_json_body(capture):
                 "--flight",
                 "642",
                 "--date",
-                "2026-08-31",
+                "2024-03-19",
                 "--origin",
                 "JFK",
                 "--destination",
@@ -241,3 +245,67 @@ def test_default_url_addresses_the_bridge_by_ip_not_the_bypassed_hostname():
     """
     assert client.DEFAULT_URL == "http://172.17.0.1:8090"
     assert "host.docker.internal" not in client.DEFAULT_URL
+
+
+# --- ranking is applied to the seats response --------------------------------
+
+
+LIVE_SEATS = {
+    "flight": "DL2957",
+    "route": "ATL-YYZ",
+    "cabin": "W",
+    "matching": [],
+    "seats": [
+        {
+            "label": "14B",
+            "row": 14,
+            "column": "B",
+            "position": "middle",
+            "isExitRow": False,
+            "isBulkhead": False,
+            "cabin": "W",
+        }
+    ],
+    "available_total": 1,
+    "recommend_alert": True,
+}
+
+
+def test_seats_response_is_ranked_before_it_reaches_the_agent():
+    """A cabin whose only free seat is a middle offers nothing."""
+    out = client._rank(dict(LIVE_SEATS))
+    assert out["ranked"] == []
+    assert out["best"] is None
+    assert out["acceptable_total"] == 0
+    assert out["available_total"] == 1
+
+
+def test_ranking_orders_bookable_seats_and_says_why():
+    payload = {
+        "cabin": "W",
+        "seats": [
+            {"label": "20C", "row": 20, "column": "C", "position": "aisle", "cabin": "W"},
+            {"label": "12A", "row": 12, "column": "A", "position": "window", "cabin": "W"},
+        ],
+        "available_total": 2,
+    }
+    out = client._rank(payload)
+    assert [s["label"] for s in out["ranked"]] == ["12A", "20C"]
+    assert out["best"] == "12A (window)"
+    assert out["acceptable_total"] == 2
+
+
+def test_ranking_leaves_the_service_criteria_filter_alone():
+    out = client._rank(dict(LIVE_SEATS))
+    assert out["matching"] == []
+
+
+def test_an_error_payload_is_passed_through_unranked():
+    err = {"error": "auth", "detail": "session expired"}
+    assert client._rank(dict(err)) == err
+
+
+def test_a_response_without_seats_is_left_alone():
+    """Older service versions return only `matching`; do not invent fields."""
+    old = {"matching": ["12A"], "available_total": 1}
+    assert client._rank(dict(old)) == old

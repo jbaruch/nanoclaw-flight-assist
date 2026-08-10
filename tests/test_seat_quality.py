@@ -213,3 +213,51 @@ def test_service_shape_window_and_aisle_rank_normally():
 def test_an_unrecognised_position_string_raises_rather_than_guessing():
     with pytest.raises(sq.SeatQualityError):
         sq.is_acceptable({"row": 10, "label": "A", "position": "porthole"})
+
+
+# --- review findings: cross-cabin comparison and label rendering -------------
+
+
+def test_describe_does_not_double_the_row_on_a_service_label():
+    """The service label is already row-qualified; naive concat renders 1414B."""
+    live = {"label": "14B", "row": 14, "column": "B", "position": "middle", "cabin": W}
+    assert sq.seat_label(live) == "14B"
+    assert sq.describe(live).startswith("14B (")
+
+
+def test_describe_still_composes_a_column_only_label():
+    raw = {"label": "A", "row": 13, "position": "window", "cabin": W}
+    assert sq.seat_label(raw) == "13A"
+
+
+def test_upgrade_across_cabins_uses_each_seat_s_own_cabin():
+    """Comfort+ outranks a Main exit row — unreachable with one shared cabin."""
+    held_main_exit = {
+        "label": "30A",
+        "row": 30,
+        "position": "window",
+        "isExitRow": True,
+        "reclines": True,
+        "cabin": Y,
+    }
+    open_comfort = {"label": "20C", "row": 20, "position": "aisle", "cabin": W}
+    assert sq.is_upgrade(open_comfort, held_main_exit) is True
+    assert sq.is_upgrade(held_main_exit, open_comfort) is False
+
+
+def test_a_worse_seat_in_a_better_cabin_still_wins():
+    """Consequence of CABIN_OUTRANKS_EXIT, pinned so a flip is deliberate."""
+    held = {"label": "12A", "row": 12, "position": "window", "cabin": Y}
+    candidate = {"label": "40C", "row": 40, "position": "aisle", "cabin": W}
+    assert sq.is_upgrade(candidate, held) is True
+
+
+def test_a_seat_without_a_cabin_raises_rather_than_being_guessed():
+    with pytest.raises(sq.SeatQualityError):
+        sq.seat_sort_key({"label": "12A", "row": 12, "position": "window"})
+
+
+def test_an_explicit_cabin_still_serves_as_the_fallback():
+    seatless = {"label": "12A", "row": 12, "position": "window"}
+    assert sq.seat_cabin(seatless, W) == W
+    assert sq.rank_seats([seatless], W)[0] is seatless
