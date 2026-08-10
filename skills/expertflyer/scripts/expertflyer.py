@@ -24,9 +24,13 @@ import urllib.request
 
 URL_ENV = "EXPERTFLYER_API_URL"
 TOKEN_ENV = "EXPERTFLYER_API_TOKEN"
-# The service runs beside the agent container on the same host, reached the way
-# the OneCLI gateway is.
-DEFAULT_URL = "http://host.docker.internal:8090"
+# The service runs beside the agent container on the same host. Address the
+# docker bridge gateway by IP, NOT host.docker.internal: that alias sits in
+# nanoclaw's AGENT_PROXY_BYPASS_HOSTS, so a request to the hostname skips the
+# OneCLI gateway — and the gateway is what swaps the real bearer in for the
+# `onecli-managed` placeholder this container holds. Using the hostname would
+# send the placeholder through unswapped and earn a 401.
+DEFAULT_URL = "http://172.17.0.1:8090"
 TIMEOUT_SECONDS = 180
 
 
