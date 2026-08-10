@@ -9,7 +9,7 @@ This skill is an action router — pick the step that matches the operator's int
 
 Every alert request is **check first, alert only if absent**. An alert for something already bookable is worse than useless: it delays the booking while the operator waits for an email describing space they could have taken on the spot. Report the check result either way, so it is visible why no alert was set. Only skip the check when the operator explicitly says to set the alert regardless.
 
-The browser automation, the ExpertFlyer credential and the session live in the `jbaruch/expertflyer-api` service. This container holds none of them — every step below is one HTTP call through `scripts/expertflyer.py`, which reads `EXPERTFLYER_API_URL` and `EXPERTFLYER_API_TOKEN`.
+The browser automation, the ExpertFlyer credential and the session live in the `jbaruch/expertflyer-api` service. This container holds none of them — every step below is one HTTP call through `skills/expertflyer/scripts/expertflyer.py`, which reads `EXPERTFLYER_API_URL` and `EXPERTFLYER_API_TOKEN`.
 
 ## Step 1 — Check fare-class (upgrade) inventory
 
@@ -41,15 +41,19 @@ python3 /home/node/.claude/skills/tessl__expertflyer/scripts/expertflyer.py seat
 
 `--cabin` takes the cabin the operator named — `premium economy`, `comfort+`, `business`, `first`, `economy` — or a bare code. Premium economy is Delta's **Premium Select** (`A`) and is a different cabin from Comfort+ (`W`); the service rejects an unrecognised cabin rather than falling back to economy. `--want` accepts `non-middle` (aisle and window), `aisle,window`, `middle`, or `any`. `--origin`/`--destination` are optional — omit them and the route is resolved from the flight number.
 
-Outputs `matching` (the service's own criteria filter), `available_total`, `seats_in_cabin`, `cabin_present`, `recommend_alert`, plus three fields the client adds by ranking the response against the operator's seat preferences:
+Outputs `cabin_present`, `seats_in_cabin`, `available_total`, `recommend_alert`, the service's own criteria filter `matching`, and three fields the client adds by ranking the response:
 
-- `ranked` — bookable seats, best first, each with a `why` such as `12A (window)`
+- `ranked` — bookable seats worth taking, best first, each with a `why` such as `12A (window)`
 - `best` — the top seat's description, or `null` when nothing is worth taking
-- `acceptable_total` — how many seats are actually worth taking
+- `acceptable_total` — how many seats are worth taking
 
-`acceptable_total` can be `0` while `available_total` is not: a middle is never offered, so a cabin whose only free seats are middles ranks to nothing. Report `best` when it is set; when it is `null` say the cabin has nothing worth moving to rather than listing the middles. Ranking rules live in `scripts/seat_quality.py`.
+Decide on `best` and `acceptable_total`, never on `matching`. Ranking drops seats the operator will not take, so `matching` can list a seat that `ranked` excludes — a middle is reported by the service and refused by the ranking. Treat `matching` as informational only.
 
-When `matching` is non-empty, tell the operator which seat is open and **do not** create an alert. When `cabin_present` is false the aircraft has no such cabin — say that; do not offer an alert for a cabin that can never open. Otherwise offer the alert (Step 3).
+1. `cabin_present` is false — the aircraft has no such cabin. Say so. Offer no alert; a cabin that does not exist can never open.
+2. `best` is set — name it and say it is open. Offer no alert.
+3. `best` is `null` — nothing in the cabin is worth taking, whatever `available_total` says. Offer the alert (Step 3).
+
+Ranking rules live in `skills/expertflyer/scripts/seat_quality.py`.
 
 Finish here unless the operator accepts the alert.
 
