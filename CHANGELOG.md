@@ -1,4 +1,15 @@
+
 # Changelog
+
+### Fixed — `optimal` off an empty evidence base, and a held cabin nothing checks
+
+Both found on the first live run against the deployed service, and both let `assess` report a confident verdict it had not earned.
+
+`assess` reported `optimal` after observing **zero** open seats. Comfort+ was sold out and Premium Select is not on the aircraft, so the sweep compared the held seat against nothing and said nothing beat it. True the way "no counterexample was found" is true after looking in no drawers, and it reads as a comparison that happened. A sweep that saw no open seat now returns `nothing_open` with `seats_compared: 0`, exits non-zero, and carries no `upgrades` or `alert_recommended`.
+
+`--held-cabin` was taken on faith. The cabin decides the ladder rung and the exit-row layout, so a wrong one poisons every part of the verdict downstream — and nothing checked it. On DL2957 seat 21F was assessed as Comfort+ while row 21 sits in the Main Cabin, an exit row that reclines; the sweep scanned Comfort+ and Premium Select and never looked at the cabin the seat is actually in.
+
+The held seat is occupied, so it never appears in a response, but its row can — under another passenger's seat in the same row. A row seen in a scanned cabin other than the one named, and nowhere in the one named, now returns `held_cabin_mismatch` naming where the row was actually found. The guard needs the real cabin to be in the sweep to fire, so it is a check on the sweep's own observations rather than a general cabin resolver.
 
 ## 0.2.105 — 2026-08-10
 

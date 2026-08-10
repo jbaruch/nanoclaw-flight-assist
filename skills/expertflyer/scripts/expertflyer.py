@@ -164,6 +164,8 @@ VERDICT_OPTIMAL = "optimal"
 VERDICT_UPGRADE = "upgrade"
 VERDICT_NO_HELD_SEAT = "no_held_seat"
 VERDICT_POSITION_UNKNOWN = "held_position_unknown"
+VERDICT_NOTHING_OPEN = "nothing_open"
+VERDICT_CABIN_MISMATCH = "held_cabin_mismatch"
 
 
 def _held_seat(label: str, cabin: str, position: str | None, cabin_seats, exit_rows) -> dict:
@@ -394,6 +396,7 @@ def _assess(args) -> dict:
         scanned[held_cabin].get("seats", []),
         scanned[held_cabin].get("exit_rows"),
     )
+    open_seats = [seat for response in scanned.values() for seat in response.get("seats", [])]
     common = {
         "flight": scanned[held_cabin].get("flight"),
         "route": scanned[held_cabin].get("route"),
@@ -403,7 +406,51 @@ def _assess(args) -> dict:
         # ones the sweep stopped short of keeps the verdict from being heard
         # as "nothing anywhere on this aircraft beats your seat".
         "cabins_unscanned": seat_quality.cabins_above(cabins[0]),
+        "seats_compared": len(open_seats),
     }
+
+    # A sweep that saw nothing has nothing to compare. `optimal` off an empty
+    # evidence base is true the way "no counterexample was found" is true after
+    # looking in no drawers — and it reads as a comparison that happened.
+    if not open_seats:
+        return {
+            **common,
+            "verdict": VERDICT_NOTHING_OPEN,
+            "held": held,
+            "detail": (
+                f"no open seat was found in {', '.join(common['cabins_scanned'])}, so nothing was "
+                f"compared against seat {args.held!r} — there is no seat to move to, better or "
+                "worse. Widen the sweep with --scan-up, or check the cabin the operator flies: a "
+                f"sold-out {held_cabin} and a seat that is not in {held_cabin} look identical here."
+            ),
+        }
+
+    # The held seat is occupied and never appears in a response. Its row can
+    # still show up — under another passenger's seat in the same row — and when
+    # that row is only ever seen in a DIFFERENT cabin, the cabin the operator
+    # named is wrong, and every rung, layout and verdict downstream is too.
+    elsewhere = sorted(
+        {
+            code
+            for code, response in scanned.items()
+            if code != held_cabin
+            and any(int(s.get("row", -1)) == row for s in response.get("seats", []))
+        }
+    )
+    in_held_cabin = any(int(s.get("row", -1)) == row for s in scanned[held_cabin].get("seats", []))
+    if elsewhere and not in_held_cabin:
+        return {
+            **common,
+            "verdict": VERDICT_CABIN_MISMATCH,
+            "held": held,
+            "detail": (
+                f"seat {args.held!r} was assessed as a {held_cabin} seat, but row {row} shows up "
+                f"in {', '.join(elsewhere)} and nowhere in {held_cabin} — so the seat is very "
+                f"likely in {elsewhere[0]}, not {held_cabin}. Re-run with the right --held-cabin; "
+                "the cabin decides the ladder rung and the exit-row layout, so every part of the "
+                "verdict depends on it."
+            ),
+        }
     if held["position"] is None:
         return {
             **common,
@@ -422,10 +469,7 @@ def _assess(args) -> dict:
     layout = sorted({int(r) for c in scanned.values() for r in (c.get("exit_rows") or [])})
     try:
         upgrades = [
-            seat
-            for response in scanned.values()
-            for seat in response.get("seats", [])
-            if seat_quality.is_upgrade(seat, held, None, layout or None)
+            seat for seat in open_seats if seat_quality.is_upgrade(seat, held, None, layout or None)
         ]
         ranked = seat_quality.rank_seats(upgrades, None, layout or None)
         tiers = seat_quality.exit_tiers(upgrades, layout or None)
@@ -494,7 +538,14 @@ def run(args) -> dict:
 # Verdicts that decline to answer. They are not service faults, but treating
 # them as success invites the caller to read a missing verdict as "nothing
 # better is open" — the exact misreport this command exists to prevent.
-UNANSWERED = frozenset({VERDICT_NO_HELD_SEAT, VERDICT_POSITION_UNKNOWN})
+UNANSWERED = frozenset(
+    {
+        VERDICT_NO_HELD_SEAT,
+        VERDICT_POSITION_UNKNOWN,
+        VERDICT_CABIN_MISMATCH,
+        VERDICT_NOTHING_OPEN,
+    }
+)
 
 
 def main(argv=None) -> int:

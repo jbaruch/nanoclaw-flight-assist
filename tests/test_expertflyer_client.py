@@ -842,7 +842,7 @@ def test_an_unknown_held_cabin_never_reaches_the_service(cabins):
 
 
 def test_scan_width_controls_how_many_cabins_are_requested(cabins):
-    cabins["W"] = _cabin("W", [])
+    cabins["W"] = _cabin("W", [{"label": "40B", "row": 40, "column": "B", "position": "middle"}])
     out = _assess(held="21F", held_position="window", scan_up=0)
     assert cabins["_asked"] == ["W"]
     assert out["cabins_scanned"] == ["W"]
@@ -881,7 +881,9 @@ def test_a_held_middle_with_only_middles_open_stays_optimal(cabins):
 def test_optimal_names_the_cabins_it_never_looked_at(cabins):
     """A one-rung sweep from Main cannot see Business, so `optimal` scoped to
     the whole aircraft would be a false verdict."""
-    cabins["Y"] = _cabin("Y", [])
+    # One open seat that loses to the held one, so the sweep has an evidence
+    # base and the verdict is a real comparison rather than an empty one.
+    cabins["Y"] = _cabin("Y", [{"label": "40B", "row": 40, "column": "B", "position": "middle"}])
     cabins["W"] = _cabin("W", [])
     out = client.run(
         client.parse_args(
@@ -908,7 +910,7 @@ def test_optimal_names_the_cabins_it_never_looked_at(cabins):
 
 
 def test_a_sweep_reaching_the_top_leaves_nothing_unscanned(cabins):
-    cabins["F"] = _cabin("F", [])
+    cabins["F"] = _cabin("F", [{"label": "4B", "row": 4, "column": "B", "position": "middle"}])
     out = client.run(
         client.parse_args(
             [
@@ -929,3 +931,149 @@ def test_a_sweep_reaching_the_top_leaves_nothing_unscanned(cabins):
         )
     )
     assert out["cabins_unscanned"] == []
+
+
+# --- the sweep needs something to compare against ----------------------------
+
+
+def test_a_sweep_that_saw_no_open_seat_reports_that_not_optimal(cabins):
+    """The live DL2957 case: Comfort+ sold out, Premium Select not on the
+    aircraft, and `optimal` reported off zero observed seats."""
+    cabins["W"] = _cabin("W", [])
+    cabins["A"] = _cabin("A", [], present=False)
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_NOTHING_OPEN
+    assert out["seats_compared"] == 0
+    assert "nothing was compared" in out["detail"]
+    assert "upgrades" not in out
+    assert "alert_recommended" not in out
+
+
+def test_nothing_open_exits_non_zero(capsys, cabins):
+    cabins["W"] = _cabin("W", [])
+    code = client.main(
+        [
+            "assess",
+            "--airline",
+            "DL",
+            "--flight",
+            "2957",
+            "--date",
+            "2024-03-05",
+            "--held-cabin",
+            "W",
+            "--held",
+            "21F",
+            "--held-position",
+            "window",
+        ]
+    )
+    assert code == 1
+    assert "nothing was compared" in capsys.readouterr().err
+
+
+def test_one_open_seat_is_evidence_enough_to_answer(cabins):
+    cabins["W"] = _cabin("W", [{"label": "40B", "row": 40, "column": "B", "position": "middle"}])
+    out = _assess(held="21F", held_position="window")
+    assert out["verdict"] == client.VERDICT_OPTIMAL
+    assert out["seats_compared"] == 1
+
+
+# --- the held seat is not in the cabin it was said to be in ------------------
+
+
+def test_a_row_seen_only_in_another_cabin_is_a_mismatch(cabins):
+    """The live DL2957 case: 21F called Comfort+, while row 21 sits in Main.
+    The cabin decides the ladder rung and the exit-row layout, so a wrong one
+    poisons every part of the verdict."""
+    cabins["Y"] = _cabin(
+        "Y",
+        [
+            {"label": "21A", "row": 21, "column": "A", "position": "window", "isExitRow": True},
+            {"label": "16A", "row": 16, "column": "A", "position": "window"},
+        ],
+        exit_rows=[19, 20, 21],
+    )
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "W",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+                "--scan-up",
+                "0",
+            ]
+        )
+    )
+    # W alone is scanned, so the mismatch is invisible — the guard needs the
+    # other cabin in the sweep to fire at all.
+    assert out["verdict"] == client.VERDICT_UPGRADE
+
+
+def test_the_mismatch_fires_when_the_other_cabin_is_in_the_sweep(cabins):
+    cabins["Y"] = _cabin(
+        "Y",
+        [{"label": "21A", "row": 21, "column": "A", "position": "window", "isExitRow": True}],
+        exit_rows=[19, 20, 21],
+    )
+    cabins["W"] = _cabin("W", [{"label": "12A", "row": 12, "column": "A", "position": "window"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "Y",
+                "--held",
+                "12F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] == client.VERDICT_CABIN_MISMATCH
+    assert "W" in out["detail"]
+    assert "upgrades" not in out
+
+
+def test_a_row_present_in_the_held_cabin_is_no_mismatch(cabins):
+    """The same row existing in two cabins is ordinary; only a row absent from
+    the held cabin and present elsewhere is a signal."""
+    cabins["Y"] = _cabin("Y", [{"label": "21A", "row": 21, "column": "A", "position": "window"}])
+    cabins["W"] = _cabin("W", [{"label": "21D", "row": 21, "column": "D", "position": "aisle"}])
+    out = client.run(
+        client.parse_args(
+            [
+                "assess",
+                "--airline",
+                "DL",
+                "--flight",
+                "2957",
+                "--date",
+                "2024-03-05",
+                "--held-cabin",
+                "W",
+                "--held",
+                "21F",
+                "--held-position",
+                "window",
+            ]
+        )
+    )
+    assert out["verdict"] in (client.VERDICT_OPTIMAL, client.VERDICT_UPGRADE)
