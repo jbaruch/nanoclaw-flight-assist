@@ -436,3 +436,18 @@ def test_an_unknown_cabin_raises_rather_than_scoring_as_main():
         sq.cabin_code("sky club")
     with pytest.raises(sq.SeatQualityError):
         sq.seat_sort_key({"label": "2A", "row": 2, "position": "window", "cabin": "P"})
+
+
+def test_an_unknown_cabin_names_the_seat_it_came_from():
+    """Step 5 relays `detail` and promises it names the seat, so a cabin fault
+    has to carry the label too — `cabin_code` alone does not know it."""
+    with pytest.raises(sq.SeatQualityError, match="2A"):
+        sq.seat_cabin({"label": "2A", "row": 2, "position": "window", "cabin": "P"})
+    with pytest.raises(sq.SeatQualityError, match="2A"):
+        sq.seat_sort_key({"label": "2A", "row": 2, "position": "window", "cabin": "P"})
+
+
+def test_a_seat_cabin_resolves_to_the_service_code():
+    """Prose on the seat normalises, so ranking compares codes throughout."""
+    assert sq.seat_cabin({"label": "2A", "cabin": "Delta One"}) == C
+    assert sq.seat_cabin({"label": "2A"}, "premium select") == A

@@ -6,6 +6,8 @@
 
 Cabins now rank on the full ladder from `references/web-contract.md`: `F` > `C` > `A` > `W` > `Y`. `cabin_code()` resolves the operator's words ("Delta One", "premium select", "coach") to the service's codes, so a held cabin stated in prose compares against the right rung. Premium economy stays `A` and never collapses into `W` — they are different cabins one rung apart.
 
+`seat_cabin()` is now the single place a seat's cabin is resolved and validated, so a cabin fault carries the seat label the way a position fault already did — `cabin_code()` knows the cabin but not whose it is, and Step 5 relays `detail` on the promise that it names the seat.
+
 An unrecognised cabin raises rather than scoring as Main Cabin. Silently ranking an unknown premium cabin at the bottom is how a downgrade gets reported as an upgrade, which is the defect this entry describes.
 
 `expertflyer.py` reports a refused ranking as `{"error": "unrankable"}` with the offending seat named, rather than letting `SeatQualityError` reach the operator as a traceback — the ranker now raises on the production path where it previously could not. `ranked`, `best` and `acceptable_total` are dropped from that response so a partial ranking cannot read as a complete one.

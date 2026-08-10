@@ -207,7 +207,13 @@ def seat_cabin(seat: dict, fallback: str | None = None) -> str:
             f"seat {seat.get('label')!r} carries no cabin and none was supplied — "
             "cabin decides rank, so guessing it would silently mis-order"
         )
-    return str(cabin)
+    try:
+        return cabin_code(cabin)
+    except SeatQualityError as exc:
+        # `cabin_code` knows the cabin but not whose it is. The seat label is
+        # what the operator needs to act on, and this is the outermost place
+        # that still has it, so the label is attached here.
+        raise SeatQualityError(f"seat {seat.get('label')!r}: {exc}") from exc
 
 
 def seat_sort_key(
