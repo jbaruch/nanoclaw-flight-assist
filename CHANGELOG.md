@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.98 — 2026-08-10
+
 ### Fixed — the ExpertFlyer client default bypassed the OneCLI gateway (#229)
 
 `DEFAULT_URL` pointed at `host.docker.internal:8090`. That alias is in nanoclaw's `AGENT_PROXY_BYPASS_HOSTS` — the INCIDENT-746 bypass that keeps the Anthropic credential-proxy hop direct — so a request to the hostname skips the OneCLI gateway entirely.
