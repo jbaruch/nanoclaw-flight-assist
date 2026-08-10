@@ -16,6 +16,20 @@ Also replaced future-date literals in the client tests with fixed past dates (#2
 
 The seats step then had two directives that could disagree. `matching` is the service's own filter and can list a seat the ranking refuses — a middle, for `--want middle` or `--want any` — so an agent following both would report a seat as open AND treat nothing as worth taking. The availability and alert decision now reads `best` / `acceptable_total` alone, with `cabin_present` handled first and `matching` demoted to informational. Prose script references are repo-relative, which also corrected an older one for the client itself.
 
+### Fixed — the exit-row recline tier is derived from the cabin layout (#249)
+
+Ranking distinguished a reclining exit row from a fixed-back one by reading a `reclines` field that the seat map does not carry. The deployed service returns `isExitRow` and `row` and no recline signal, so the distinction never fired and both exit rows ranked identically — on a Main Cabin flight the skill could have pointed at the fixed-back row.
+
+It is now read off geometry. An exit row cannot recline when another exit row sits directly behind it, which is precisely why the forward row of a pair is fixed and the second is the one worth having. A lone exit row has nothing behind it and reclines.
+
+The ranked output carries the derived tier through to its description too: the client computes the tiers once and passes them to both ranking and rendering, so a derived reclining row reads as `21A (window, exit row, reclines)` rather than a bare `exit row`.
+
+Adjacency needs the cabin's FULL exit-row layout, not the seats on offer. The service reports bookable seats only, so an occupied rear exit row is invisible — deriving the tier from that list alone would call the open row in front of it reclining, recommending precisely the fixed-back seat the operator does not want. Ranking therefore takes the layout separately and, without it, claims no exit row reclines: an explicit per-seat flag is still honoured where one exists, but absent evidence never promotes.
+
+Within a supplied layout, a middle in the row behind still fixes the row in front, so tiers are computed across every row rather than only the bookable ones.
+
+The layout reaches `is_upgrade()` as well as bulk ranking. Without it the watch case compared a rear reclining exit row as though it were fixed-back, so the seat that opened could lose to the forward row it should beat — the one comparison that function exists to make. Judging a seat in isolation, with no cabin context, still falls back to an explicit `reclines` field and then to the weaker tier, so an unknown seat is never promoted over one known to recline.
+
 ## 0.2.98 — 2026-08-10
 
 ### Fixed — the ExpertFlyer client default bypassed the OneCLI gateway (#229)

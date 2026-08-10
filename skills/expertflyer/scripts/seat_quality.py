@@ -45,8 +45,8 @@ POSITION_SCORE = {"window": 2, "aisle": 1}
 COMFORT_PLUS = "W"
 MAIN_CABIN = "Y"
 
-# Main Cabin exit tiers, rule 3. The recline distinction is what separates
-# the two exit rows on most narrowbodies — the first is fixed-back.
+# Exit tiers, rule 3. The recline distinction separates paired exit rows: the
+# forward one is fixed-back precisely BECAUSE the second sits behind it.
 EXIT_RECLINE = 2
 EXIT_NO_RECLINE = 1
 NOT_EXIT = 0
@@ -84,17 +84,48 @@ def _position(seat: dict) -> str:
     )
 
 
-def _exit_tier(seat: dict, cabin: str) -> int:
+def exit_tiers(seats, cabin_exit_rows=None) -> dict[int, int]:
+    """Map each exit row to its recline tier, derived from the cabin's layout.
+
+    The seat map carries `isExitRow` and `row` but no recline signal, so the
+    distinction is read off geometry: an exit row cannot recline when another
+    exit row sits directly behind it. That is why the forward row of a pair is
+    fixed-back, and why the second is the one worth having.
+
+    `cabin_exit_rows` must be EVERY exit row in the cabin. `seats` alone is not
+    enough: the service reports bookable seats only, so an occupied rear exit
+    row is invisible and the open row in front of it would be promoted to
+    reclining — recommending the one seat the operator specifically does not
+    want. Without the full layout, no exit row is claimed to recline.
+    """
+    exits = [s for s in seats if s.get("isExitRow")]
+    present = {int(s["row"]) for s in exits}
+    if cabin_exit_rows is None:
+        # No layout: fall back to an explicit per-seat flag where one exists,
+        # and otherwise claim nothing. Never promote on absent evidence.
+        return {
+            int(s["row"]): (EXIT_RECLINE if s.get("reclines") else EXIT_NO_RECLINE) for s in exits
+        }
+    layout = {int(r) for r in cabin_exit_rows}
+    return {r: (EXIT_NO_RECLINE if (r + 1) in layout else EXIT_RECLINE) for r in present}
+
+
+def _exit_tier(seat: dict, cabin: str, tiers: dict[int, int] | None = None) -> int:
     """Exit-row tier, applied in every cabin.
 
     Exit rows are overwhelmingly a Main Cabin feature, but scoping the
     preference to Main would silently mis-rank a cabin that happens to have
     one. `cabin` is retained for callers and future per-cabin nuance.
+
+    `tiers` comes from `exit_tiers()` over the whole cabin. Without it — a
+    single seat judged in isolation — fall back to an explicit `reclines`
+    field, and failing that to the weaker tier, so an unknown seat is never
+    promoted over one known to recline.
     """
     if not seat.get("isExitRow"):
         return NOT_EXIT
-    # `reclines` absent means unknown; treat as the weaker exit tier rather
-    # than promoting a seat that may be fixed-back.
+    if tiers is not None:
+        return tiers.get(int(seat["row"]), EXIT_NO_RECLINE)
     return EXIT_RECLINE if seat.get("reclines") else EXIT_NO_RECLINE
 
 
@@ -119,7 +150,9 @@ def seat_cabin(seat: dict, fallback: str | None = None) -> str:
     return str(cabin)
 
 
-def seat_sort_key(seat: dict, cabin: str | None = None) -> tuple:
+def seat_sort_key(
+    seat: dict, cabin: str | None = None, tiers: dict[int, int] | None = None
+) -> tuple:
     """Sort key for one seat; higher tuples are better seats.
 
     Position and row trade off rather than one dominating: a window counts as
@@ -129,7 +162,7 @@ def seat_sort_key(seat: dict, cabin: str | None = None) -> tuple:
     """
     resolved = seat_cabin(seat, cabin)
     position = POSITION_SCORE[_position(seat)]
-    exit_tier = _exit_tier(seat, resolved)
+    exit_tier = _exit_tier(seat, resolved, tiers)
     row = int(seat["row"])
 
     effective_row = row - WINDOW_WORTH_ROWS if _position(seat) == "window" else row
@@ -137,14 +170,20 @@ def seat_sort_key(seat: dict, cabin: str | None = None) -> tuple:
     return (cabin_key, exit_tier, -effective_row, position)
 
 
-def rank_seats(seats, cabin: str | None = None) -> list[dict]:
-    """Acceptable seats, best first. Middles are dropped, never ranked last."""
+def rank_seats(seats, cabin: str | None = None, cabin_exit_rows=None) -> list[dict]:
+    """Acceptable seats, best first. Middles are dropped, never ranked last.
+
+    `cabin_exit_rows` is the cabin's full exit-row set; see `exit_tiers`.
+    """
     usable = [s for s in seats if is_acceptable(s)]
-    return sorted(usable, key=lambda s: seat_sort_key(s, cabin), reverse=True)
+    # Adjacency is a property of the cabin, not of one seat, so the tiers are
+    # computed over every seat given — including the ones ranking will drop.
+    tiers = exit_tiers(seats, cabin_exit_rows)
+    return sorted(usable, key=lambda s: seat_sort_key(s, cabin, tiers), reverse=True)
 
 
-def best_seat(seats, cabin: str | None = None) -> dict | None:
-    ranked = rank_seats(seats, cabin)
+def best_seat(seats, cabin: str | None = None, cabin_exit_rows=None) -> dict | None:
+    ranked = rank_seats(seats, cabin, cabin_exit_rows)
     return ranked[0] if ranked else None
 
 
@@ -163,10 +202,10 @@ def seat_label(seat: dict) -> str:
     return f"{row}{column}"
 
 
-def describe(seat: dict, cabin: str | None = None) -> str:
+def describe(seat: dict, cabin: str | None = None, tiers: dict[int, int] | None = None) -> str:
     """Short human label, e.g. '13A (window, exit row)'."""
     bits = [_position(seat)]
-    tier = _exit_tier(seat, seat_cabin(seat, cabin))
+    tier = _exit_tier(seat, seat_cabin(seat, cabin), tiers)
     if tier == EXIT_RECLINE:
         bits.append("exit row, reclines")
     elif tier == EXIT_NO_RECLINE:
@@ -176,16 +215,27 @@ def describe(seat: dict, cabin: str | None = None) -> str:
     return f"{seat_label(seat)} ({', '.join(bits)})"
 
 
-def is_upgrade(candidate: dict, current: dict | None, cabin: str | None = None) -> bool:
+def is_upgrade(
+    candidate: dict,
+    current: dict | None,
+    cabin: str | None = None,
+    cabin_exit_rows=None,
+) -> bool:
     """True when `candidate` is strictly better than the seat already held.
 
     Used for the watch case: only worth interrupting the operator when the
     seat that opened actually beats what they have.
+
+    `cabin_exit_rows` carries the same layout ranking uses. Without it a rear
+    reclining exit row looks fixed-back and can lose to the forward row it
+    should beat — the comparison this function exists to make.
     """
     if not is_acceptable(candidate):
         return False
     if current is None:
         return True
+    pair = [candidate, current]
+    tiers = exit_tiers(pair, cabin_exit_rows)
     # Each seat resolves its OWN cabin: the candidate may be Comfort+ while the
     # held seat is Main, which is exactly the comparison worth making.
-    return seat_sort_key(candidate, cabin) > seat_sort_key(current, cabin)
+    return seat_sort_key(candidate, cabin, tiers) > seat_sort_key(current, cabin, tiers)

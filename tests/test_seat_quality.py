@@ -261,3 +261,122 @@ def test_an_explicit_cabin_still_serves_as_the_fallback():
     seatless = {"label": "12A", "row": 12, "position": "window"}
     assert sq.seat_cabin(seatless, W) == W
     assert sq.rank_seats([seatless], W)[0] is seatless
+
+
+# --- #249: recline derived from exit-row adjacency ---------------------------
+
+
+def exit_seat(row, label="A", position="window", cabin=None):
+    return {
+        "label": f"{row}{label}",
+        "row": row,
+        "column": label,
+        "position": position,
+        "isExitRow": True,
+        "cabin": cabin or W,
+    }
+
+
+def test_paired_exit_rows_put_the_second_ahead_of_the_first():
+    """ "we don't want first, and want second" — the first cannot recline."""
+    first, second = exit_seat(20), exit_seat(21)
+    assert sq.rank_seats([first, second], W, [20, 21])[0] is second
+
+
+def test_a_lone_exit_row_reclines():
+    """Nothing behind it in the CABIN LAYOUT, so nothing stops it reclining."""
+    lone = exit_seat(30)
+    assert sq.exit_tiers([lone], [30]) == {30: sq.EXIT_RECLINE}
+
+
+def test_only_the_row_with_an_exit_behind_it_is_fixed():
+    seats = [exit_seat(20), exit_seat(21)]
+    assert sq.exit_tiers(seats, [20, 21]) == {20: sq.EXIT_NO_RECLINE, 21: sq.EXIT_RECLINE}
+
+
+def test_three_consecutive_exit_rows_fix_all_but_the_last():
+    seats = [exit_seat(20), exit_seat(21), exit_seat(22)]
+    tiers = sq.exit_tiers(seats, [20, 21, 22])
+    assert tiers == {
+        20: sq.EXIT_NO_RECLINE,
+        21: sq.EXIT_NO_RECLINE,
+        22: sq.EXIT_RECLINE,
+    }
+
+
+def test_non_adjacent_exit_rows_both_recline():
+    """The adjacency rule must not over-fire on separated exit rows."""
+    seats = [exit_seat(12), exit_seat(30)]
+    assert sq.exit_tiers(seats, [12, 30]) == {12: sq.EXIT_RECLINE, 30: sq.EXIT_RECLINE}
+    # Both recline, so the tie falls to the ordinary rule: further forward.
+    assert sq.rank_seats(seats, W, [12, 30])[0]["row"] == 12
+
+
+def test_adjacency_is_computed_over_the_whole_cabin_including_dropped_seats():
+    """A middle in the row behind still fixes the row in front."""
+    seats = [
+        exit_seat(20),
+        {
+            "label": "21B",
+            "row": 21,
+            "column": "B",
+            "position": "middle",
+            "isExitRow": True,
+            "cabin": W,
+        },
+    ]
+    assert sq.exit_tiers(seats, [20, 21])[20] == sq.EXIT_NO_RECLINE
+    assert [s["row"] for s in sq.rank_seats(seats, W, [20, 21])] == [20]
+
+
+def test_describe_names_the_reclining_exit_row_from_adjacency():
+    seats = [exit_seat(20), exit_seat(21)]
+    tiers = sq.exit_tiers(seats, [20, 21])
+    assert "exit row, reclines" in sq.describe(seats[1], W, tiers)
+    assert sq.describe(seats[0], W, tiers).endswith("exit row)")
+
+
+def test_an_isolated_seat_still_falls_back_to_the_reclines_field():
+    """No cabin context: honour an explicit flag rather than guessing."""
+    solo = {**exit_seat(30), "reclines": True}
+    assert sq._exit_tier(solo, W) == sq.EXIT_RECLINE
+    del solo["reclines"]
+    assert sq._exit_tier(solo, W) == sq.EXIT_NO_RECLINE
+
+
+def test_an_occupied_rear_exit_row_must_not_promote_the_row_in_front():
+    """The service lists bookable seats only.
+
+    Row 21 is an exit row but fully occupied, so it never appears in `seats`.
+    Deriving adjacency from the bookable list alone would call row 20
+    reclining — recommending precisely the fixed-back seat the operator does
+    not want. The cabin layout is what settles it.
+    """
+    bookable = [exit_seat(20)]
+    layout = [20, 21]
+    assert sq.exit_tiers(bookable, layout) == {20: sq.EXIT_NO_RECLINE}
+    assert sq.describe(bookable[0], W, sq.exit_tiers(bookable, layout)).endswith("exit row)")
+
+
+def test_without_a_layout_no_exit_row_is_claimed_to_recline():
+    """Conservative default: never promote a seat that may be fixed-back."""
+    assert sq.exit_tiers([exit_seat(30)]) == {30: sq.EXIT_NO_RECLINE}
+    assert sq.exit_tiers([exit_seat(20), exit_seat(21)]) == {
+        20: sq.EXIT_NO_RECLINE,
+        21: sq.EXIT_NO_RECLINE,
+    }
+
+
+def test_upgrade_sees_the_reclining_exit_row_when_given_the_layout():
+    """The watch case: 21A opens and must beat the fixed-back 20A held today."""
+    held = exit_seat(20, cabin=Y)
+    opened = exit_seat(21, cabin=Y)
+    assert sq.is_upgrade(opened, held, Y, [20, 21]) is True
+    assert sq.is_upgrade(held, opened, Y, [20, 21]) is False
+
+
+def test_upgrade_without_a_layout_does_not_invent_a_recline():
+    """Neither is claimed to recline, so the forward row wins on position."""
+    held = exit_seat(20, cabin=Y)
+    opened = exit_seat(21, cabin=Y)
+    assert sq.is_upgrade(opened, held, Y) is False
