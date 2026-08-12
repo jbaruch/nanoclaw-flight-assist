@@ -1188,7 +1188,7 @@ def test_load_trips_from_db_returns_none_on_forward_schema_version(check_travel_
     instead of attempting to parse an unknown shape."""
     module, db_path, _ = check_travel_bookings
     payload = _db_payload({})
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
     db_path.write_text(json.dumps(payload))
     assert module.load_trips_from_db(str(db_path)) is None
 
@@ -1290,7 +1290,7 @@ def test_main_snooze_with_forward_schema_ignored(check_travel_bookings, monkeypa
         json.dumps(
             {
                 "madrid-2026-06": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "snooze_until": (_FROZEN_TODAY + timedelta(days=2)).isoformat(),
                 }
             }
@@ -1559,3 +1559,207 @@ def test_a_flighted_trip_is_unaffected_by_the_verdict_store(
     _code, out, _err = _run(module, monkeypatch, capsys)
     payload = json.loads(out)
     assert all(g["issue"] != "отель есть, рейса нет" for g in payload["gaps"])
+
+
+# ---------------------------------------------------------------------------
+# Red-eye home — local vs UTC dates (#268)
+# ---------------------------------------------------------------------------
+
+
+def _red_eye_home_trip(*, with_lodging):
+    """A stay whose return is a red-eye: out on day 1, hotel through the
+    last morning, and a flight that leaves at 11:05 PM local and lands the
+    next morning. Every timed item carries both stamps, so a reader that
+    reaches for the UTC one books the departure a day late.
+
+    Trip window runs day 0 → day 7 (TripIt's exclusive end), the outbound is
+    day 0, the hotel covers nights 0–4, and the red-eye leaves the night of
+    day 5 to land on day 6.
+    """
+    day0 = _FROZEN_TODAY + timedelta(days=10)
+    days = {
+        day0.isoformat(): [
+            {
+                **_item(type="Flight", summary="DL891 BNA to SFO", start=f"{day0}T11:20:00Z"),
+                "start_local": f"{day0}T06:20:00-05:00",
+                "end_local": f"{day0}T08:30:00-07:00",
+            },
+        ],
+    }
+    if with_lodging:
+        checkin = day0
+        checkout = day0 + timedelta(days=5)
+        days[checkin.isoformat()].append(
+            {
+                **_item(
+                    type="Lodging",
+                    summary="Check-in: Residence Inn",
+                    start=f"{checkin}T22:00:00Z",
+                    uid="item-in@tripit",
+                ),
+                "start_local": f"{checkin}T15:00:00-07:00",
+            }
+        )
+        days[checkout.isoformat()] = [
+            {
+                **_item(
+                    type="Lodging",
+                    summary="Check-out: Residence Inn",
+                    start=f"{checkout}T19:00:00Z",
+                    uid="item-out@tripit",
+                ),
+                "start_local": f"{checkout}T12:00:00-07:00",
+            }
+        ]
+    # The red-eye: 11:05 PM on day 5 local, 06:05Z on day 6.
+    depart_local = day0 + timedelta(days=5)
+    arrive_utc = day0 + timedelta(days=6)
+    days.setdefault(depart_local.isoformat(), []).append(
+        {
+            **_item(
+                type="Flight",
+                summary="WN1683 SFO to BNA",
+                start=f"{arrive_utc}T06:05:00Z",
+                end=f"{arrive_utc}T10:30:00Z",
+                uid="item-redeye@tripit",
+            ),
+            "start_local": f"{depart_local}T23:05:00-07:00",
+            "end_local": f"{arrive_utc}T05:30:00-05:00",
+        }
+    )
+    return _trip_record(
+        summary="Onboarding CA",
+        start=day0,
+        end=day0 + timedelta(days=7),
+        days=days,
+    )
+
+
+def test_night_spent_on_the_red_eye_is_not_a_hotel_gap(check_travel_bookings, monkeypatch, capsys):
+    """The reported bug. The hotel checks out on the morning of day 5 and
+    the traveller boards a red-eye that night, so day 5 is a night in the
+    air, not a night owed a bed. Reading the departure off its UTC date
+    files it on day 6 and leaves day 5 looking uncovered."""
+    module, db_path, _ = check_travel_bookings
+    db_path.write_text(
+        json.dumps(_db_payload({"onboarding-ca": _red_eye_home_trip(with_lodging=True)}))
+    )
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert output["gaps"] == []
+    assert output["complete_trips"] == 1
+
+
+def test_red_eye_home_with_no_lodging_at_all_is_not_a_gap(
+    check_travel_bookings, monkeypatch, capsys
+):
+    """A turnaround that flies out and takes the red-eye straight back
+    spends no night on the ground, so it needs no hotel. Its arrival lands
+    INSIDE the trip window rather than past it, which is why the arrival
+    date alone cannot tell it from a trip the traveller is staying on."""
+    module, db_path, _ = check_travel_bookings
+    day0 = _FROZEN_TODAY + timedelta(days=10)
+    trip = _trip_record(
+        summary="Roast My PR",
+        start=day0,
+        end=day0 + timedelta(days=2),
+        days={
+            day0.isoformat(): [
+                {
+                    **_item(type="Flight", summary="DL750 BNA to SFO", start=f"{day0}T15:59:00Z"),
+                    "start_local": f"{day0}T10:59:00-05:00",
+                    "end_local": f"{day0}T15:42:00-07:00",
+                },
+                {
+                    **_item(
+                        type="Flight",
+                        summary="DL690 SFO to BNA",
+                        start=f"{day0 + timedelta(days=1)}T06:15:00Z",
+                        end=f"{day0 + timedelta(days=1)}T12:00:00Z",
+                        uid="item-redeye@tripit",
+                    ),
+                    "start_local": f"{day0}T23:15:00-07:00",
+                    "end_local": f"{day0 + timedelta(days=1)}T08:30:00-05:00",
+                },
+            ],
+        },
+    )
+    db_path.write_text(json.dumps(_db_payload({"roast-my-pr": trip})))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert output["gaps"] == []
+    assert output["complete_trips"] == 1
+
+
+def test_red_eye_home_does_not_excuse_uncovered_nights_before_it(
+    check_travel_bookings, monkeypatch, capsys
+):
+    """How a trip ENDS says nothing about the nights in the middle of it.
+    The same red-eye return with no lodging booked still owes a bed for
+    every night the traveller was on the ground."""
+    module, db_path, _ = check_travel_bookings
+    db_path.write_text(
+        json.dumps(_db_payload({"onboarding-ca": _red_eye_home_trip(with_lodging=False)}))
+    )
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert len(output["gaps"]) == 1
+    gap = output["gaps"][0]
+    assert gap["issue"] == "рейсы есть, отеля нет"
+    # Nights 1–4: after the outbound day, before the night on the plane.
+    day0 = _FROZEN_TODAY + timedelta(days=10)
+    assert gap["uncovered_nights"] == [(day0 + timedelta(days=n)).isoformat() for n in range(1, 5)]
+
+
+def test_v1_db_without_local_stamps_still_reads(check_travel_bookings, monkeypatch, capsys):
+    """The DB on disk stays v1 until the next nightly rebuild. A record with
+    no local stamps falls back to its UTC dates — the pre-#268 behavior —
+    rather than erroring the whole brief during the rollout window."""
+    module, db_path, _ = check_travel_bookings
+    day0 = _FROZEN_TODAY + timedelta(days=10)
+    payload = _db_payload(
+        {
+            "madrid": _trip_record(
+                summary="Madrid",
+                start=day0,
+                end=day0 + timedelta(days=3),
+                days={
+                    day0.isoformat(): [
+                        _item(type="Flight", summary="IB1 BNA to MAD", start=f"{day0}T11:20:00Z"),
+                    ],
+                    (day0 + timedelta(days=2)).isoformat(): [
+                        _item(
+                            type="Flight",
+                            summary="IB2 MAD to BNA",
+                            start=f"{day0 + timedelta(days=2)}T11:20:00Z",
+                            uid="item-back@tripit",
+                        ),
+                    ],
+                },
+            )
+        }
+    )
+    payload["schema_version"] = 1
+    db_path.write_text(json.dumps(payload))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert len(output["gaps"]) == 1
+    assert output["gaps"][0]["issue"] == "рейсы есть, отеля нет"
+    assert output["gaps"][0]["uncovered_nights"] == [(day0 + timedelta(days=1)).isoformat()]
+
+
+def test_v2_db_is_accepted(check_travel_bookings, monkeypatch, capsys):
+    """The version the current writer stamps reads normally."""
+    module, db_path, _ = check_travel_bookings
+    payload = _db_payload({})
+    payload["schema_version"] = 2
+    db_path.write_text(json.dumps(payload))
+    assert module.load_trips_from_db(str(db_path)) == []

@@ -1,6 +1,6 @@
 # Check Travel Bookings — State Schema
 
-This skill owns two cross-invocation JSON state artifacts under `/workspace/group/`. Per `coding-policy: stateful-artifacts`, both carry a `schema_version` field for auditable migration. The current schema version is **1**.
+This skill owns two cross-invocation JSON state artifacts under `/workspace/group/`. Per `coding-policy: stateful-artifacts`, both carry a `schema_version` field for auditable migration. `travel-db.json` is at **2**; `travel-booking-state.json` is at **1**.
 
 ## `/workspace/group/travel-db.json`
 
@@ -11,12 +11,13 @@ Compact day-indexed projection of upcoming trips.
 - **Readers:**
   - `scripts/check-travel-bookings.py` (owner; gates on `schema_version`)
   - `nanoclaw-admin/morning-brief` (cross-plugin, via the same script invoked as the reader)
-  - `flight-assist/trip_window.py` (cross-plugin non-owner reader — the #147 trip-window gate). Gates on `schema_version` and, per `coding-policy: stateful-artifacts` Cross-Pipeline Schema Bumps, treats any version other than the accepted `1` as no-usable-state and **fails open** (defers to the host pre-spawn gate rather than blind a possibly-active trip). A bump here must land in lock-step with `trip_window._ACCEPTED_TRAVEL_DB_SCHEMA_VERSION`, and with the host gate `src/spawn-gates.ts` in jbaruch/nanoclaw, which read the same file through their own pipelines.
+  - `flight-assist/trip_window.py` (same-plugin non-owner reader — the #147 trip-window gate). Gates on `schema_version` and, per `coding-policy: stateful-artifacts`, treats any version outside its accepted set as no-usable-state and **fails open** (defers to the host pre-spawn gate rather than blind a possibly-active trip). A bump here lands in lock-step with `trip_window._ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS`.
+  - The host gate `src/host-plugins/flight-assist-spawn-gate.ts` in jbaruch/nanoclaw reads this file through its own pipeline, but reads **only** trip-level `start`/`end` and never `schema_version`, so a version bump here is invisible to it. A change to the trip-level shape is what would need lock-step there.
 - **Schema:**
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated_at": "YYYY-MM-DDTHH:MM:SSZ",
   "trips": {
     "<slug>": {
@@ -28,6 +29,12 @@ Compact day-indexed projection of upcoming trips.
   }
 }
 ```
+
+Each `<item>` carries `type`, `summary`, `start`, `end`, `uid`, and — for a timed record whose local clock resolved — the optional `start_local` / `end_local` stamps (`YYYY-MM-DDTHH:MM:SS±HH:MM`) carried through from `travel-schedule.json` v3. The `days` key is the item's LOCAL date when it has one, its UTC date otherwise. Date-granular readers take the local field first and fall back to the UTC one; see `scripts/check-travel-bookings.py:_item_day`.
+
+### v1 → v2
+
+Additive (#268): day items gain the optional `start_local` / `end_local` fields, and the `days` key follows the local date where one exists. Trip-level `start`/`end` are unchanged. A v1 DB reads with the local fields simply absent, so `check-travel-bookings.py` and `trip_window.py` both accept `{1, 2}` for the rollout window — the DB on disk stays v1 until the next nightly rebuild. Drop `1` from both accepted sets once no v1 DB can be in play.
 
 ## `/workspace/group/travel-booking-state.json`
 
@@ -52,9 +59,9 @@ A `resolved` outcome is represented by removing the entry entirely (the next nig
 ## Migration policy
 
 - The owner skill migrates on its own read: legacy data without `schema_version` is treated as implicit v1 (the schema was introduced at v1; no prior version exists). Subsequent writes stamp the field explicitly.
-- `schema_version` higher than the current constant (currently 1) is treated as forward-incompatible — `check-travel-bookings.py` returns no-prior-state and `build-travel-db.py` does not overwrite.
-- Non-owner readers MUST treat a `schema_version` mismatch as no-prior-state without rewriting. Today's cross-plugin non-owner reader is `flight-assist/trip_window.py` (the #147 trip-window gate; see the `travel-db.json` readers list above) — it accepts only version `1` and fails open on any other stamp, so a bump here runs mixed versions until `trip_window._ACCEPTED_TRAVEL_DB_SCHEMA_VERSION` (and the host gate `src/spawn-gates.ts` in jbaruch/nanoclaw) are advanced in lock-step.
+- `schema_version` outside the reader's accepted set is treated as forward-incompatible — `check-travel-bookings.py` returns no-prior-state and `build-travel-db.py` does not overwrite. `travel-booking-state.json` entries follow the same gate.
+- Non-owner readers MUST treat a `schema_version` mismatch as no-prior-state without rewriting. Today's non-owner reader is `flight-assist/trip_window.py` (the #147 trip-window gate; see the `travel-db.json` readers list above) — it fails open on any stamp outside its accepted set, so a bump runs mixed versions until `trip_window._ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS` advances. Writer and readers ship in one plugin, so a bump lands with its dual-accept readers in the same release.
 
 ## Schema-version constant
 
-Defined in `scripts/build-travel-db.py` (writer) and `scripts/check-travel-bookings.py` (reader) as `SCHEMA_VERSION = 1`. Bump in lock-step when changing the on-disk shape.
+Defined in `scripts/build-travel-db.py` (writer) and `scripts/check-travel-bookings.py` (reader) as `SCHEMA_VERSION = 2`. Bump in lock-step when changing the on-disk shape, and widen the readers' accepted sets in the same change.

@@ -237,7 +237,7 @@ def test_stdout_is_structured_json(build_travel_db, monkeypatch, capsys):
     code, out, _ = _run(module, monkeypatch, capsys)
     assert code == 0
     payload = json.loads(out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["trips_written"] == 1
     assert payload["item_events_written"] == 2
     assert len(payload["trips"]) == 1
@@ -259,7 +259,7 @@ def test_output_stamps_schema_version(build_travel_db, monkeypatch, capsys):
     code, _, _ = _run(module, monkeypatch, capsys)
     assert code == 0
     db = json.loads(db_path.read_text())
-    assert db["schema_version"] == module.SCHEMA_VERSION == 1
+    assert db["schema_version"] == module.SCHEMA_VERSION == 2
 
 
 def test_timed_item_buckets_by_date_and_preserves_time(build_travel_db, monkeypatch, capsys):
@@ -286,3 +286,86 @@ def test_timed_item_buckets_by_date_and_preserves_time(build_travel_db, monkeypa
     flight = days["2026-05-22"][0]
     assert flight["start"] == "2026-05-22T07:00:00Z"
     assert flight["end"] == "2026-05-22T14:00:00Z"
+
+
+def test_local_stamps_pass_through_and_drive_the_day_key(build_travel_db, monkeypatch, capsys):
+    """A v3 schedule record's `start_local`/`end_local` reach the day item
+    untouched, and the day key follows the LOCAL date. The red-eye below is
+    an 06:05Z May 23 instant that the traveller boarded at 11:05 PM on May
+    22 — filing it under the 23rd is what made the night of the 22nd read as
+    a night owed a hotel (#268)."""
+    module, schedule_path, db_path = build_travel_db
+    schedule = [
+        _trip("trip", "SF Trip", "2026-05-18", "2026-05-24"),
+        {
+            **_item(
+                "item-red-eye",
+                "WN1683 SFO to BNA",
+                "2026-05-23T06:05:00Z",
+                "2026-05-23T10:30:00Z",
+                "Flight",
+            ),
+            "start_local": "2026-05-22T23:05:00-07:00",
+            "end_local": "2026-05-23T05:30:00-05:00",
+        },
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    db = json.loads(db_path.read_text())
+    days = db["trips"][next(iter(db["trips"]))]["days"]
+    assert "2026-05-22" in days
+    assert "2026-05-23" not in days
+    flight = days["2026-05-22"][0]
+    assert flight["start"] == "2026-05-23T06:05:00Z"
+    assert flight["start_local"] == "2026-05-22T23:05:00-07:00"
+    assert flight["end_local"] == "2026-05-23T05:30:00-05:00"
+
+
+def test_item_without_local_stamps_keeps_the_utc_day_key(build_travel_db, monkeypatch, capsys):
+    """A v2 schedule record, or a v3 one whose local time never resolved,
+    carries no local fields and buckets by its UTC date exactly as before."""
+    module, schedule_path, db_path = build_travel_db
+    schedule = [
+        _trip("trip", "Munich Trip", "2026-05-21", "2026-05-23"),
+        _item(
+            "item-flight",
+            "DL23 MUC to DTW",
+            "2026-05-22T07:00:00Z",
+            "2026-05-22T14:00:00Z",
+            "Flight",
+        ),
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    db = json.loads(db_path.read_text())
+    flight = db["trips"][next(iter(db["trips"]))]["days"]["2026-05-22"][0]
+    assert "start_local" not in flight
+    assert "end_local" not in flight
+
+
+def test_blank_local_stamp_is_not_carried(build_travel_db, monkeypatch, capsys):
+    """An empty-string local stamp is absence, not a date. Copying it would
+    make `[:10]` produce an empty day key."""
+    module, schedule_path, db_path = build_travel_db
+    schedule = [
+        _trip("trip", "Munich Trip", "2026-05-21", "2026-05-23"),
+        {
+            **_item(
+                "item-flight",
+                "DL23 MUC to DTW",
+                "2026-05-22T07:00:00Z",
+                "2026-05-22T14:00:00Z",
+                "Flight",
+            ),
+            "start_local": "",
+        },
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    db = json.loads(db_path.read_text())
+    days = db["trips"][next(iter(db["trips"]))]["days"]
+    assert "2026-05-22" in days
+    assert "start_local" not in days["2026-05-22"][0]
