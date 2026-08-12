@@ -13,7 +13,11 @@ from pathlib import Path
 # stamps and every downstream reader matches on. Runtime mount first, dev-clone
 # sibling fallback for CI (travel-core's SKILL.md pattern; this script sits one
 # level deeper, under `scripts/`).
-_BUNDLE_DIR = Path(__file__).resolve().parent.parent
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+_BUNDLE_DIR = _SCRIPT_DIR.parent
 _TRAVEL_CORE = Path("/home/node/.claude/skills/tessl__travel-core")
 if not _TRAVEL_CORE.is_dir():
     _TRAVEL_CORE = _BUNDLE_DIR.parent / "travel-core"
@@ -21,6 +25,13 @@ if str(_TRAVEL_CORE) not in sys.path:
     sys.path.insert(0, str(_TRAVEL_CORE))
 
 from lodging import hotel_name, lodging_role  # noqa: E402
+
+# Sibling module, resolved through the `_SCRIPT_DIR` insert above so the
+# import holds whether this file is executed or loaded by path (drive-engine's
+# `reconcile_sweep` uses the same shape). It reconstructs the traveller's own
+# clock from the UTC instant this feed stamps plus the local time DESCRIPTION
+# prints — see `tripit_local_time.py`.
+from tripit_local_time import local_times  # noqa: E402
 
 TIMEOUT_SECONDS = 30
 URL_PATH = "/workspace/group/tripit-url.txt"
@@ -32,7 +43,7 @@ OUTPUT_PATH = "/workspace/group/travel-schedule.json"
 # in full from the live TripIt ICS every run (no in-place migration —
 # the writer always emits the current version, cross-plugin readers gate
 # on it). See the sibling `state-schema.md` for the owner/reader contract.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def lodging_pair_key(summary, description):
@@ -235,22 +246,35 @@ def main():
             else ev["end"].strftime("%Y-%m-%d")
         )
 
-        events.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "summary": ev["summary"],
-                "start": start_iso,
-                "end": end_iso,
-                "location": ev["location"],
-                "type": ev["type"],
-                "uid": ev["uid"],
-                # v2: persist DESCRIPTION — the iCal `[Type] <DEP> to <ARR>` line
-                # is the only reliable source of a Flight segment's route (both
-                # airports), consumed by drive-engine's TripIt-union parser (#156
-                # R2). Additive; readers that don't use it are unaffected.
-                "description": ev["description"],
-            }
-        )
+        record = {
+            "schema_version": SCHEMA_VERSION,
+            "summary": ev["summary"],
+            "start": start_iso,
+            "end": end_iso,
+            "location": ev["location"],
+            "type": ev["type"],
+            "uid": ev["uid"],
+            # v2: persist DESCRIPTION — the iCal `[Type] <DEP> to <ARR>` line
+            # is the only reliable source of a Flight segment's route (both
+            # airports), consumed by drive-engine's TripIt-union parser (#156
+            # R2). Additive; readers that don't use it are unaffected.
+            "description": ev["description"],
+        }
+
+        # v3: the traveller's own clock, offset included. The feed stamps
+        # UTC only, so a night spent on a red-eye out of San Francisco was
+        # filed under the next day and read as a night owed a hotel (#268).
+        # Additive and omitted when unresolved (see `tripit_local_time`),
+        # so a reader that doesn't ask for it, and a record that can't
+        # answer, both stay on the UTC dates they used at v2.
+        if ev["start_timed"] and ev["end_timed"]:
+            local_start, local_end = local_times(ev["start"], ev["end"], ev["description"])
+            if local_start is not None:
+                record["start_local"] = local_start.isoformat()
+            if local_end is not None:
+                record["end_local"] = local_end.isoformat()
+
+        events.append(record)
 
     events.sort(key=lambda e: e["start"])
 

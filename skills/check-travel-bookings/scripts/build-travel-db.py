@@ -9,7 +9,7 @@ ALL item types are stored; alert logic lives in the consumers.
 Output: /workspace/group/travel-db.json
 Schema (see sibling `state-schema.md` for the full contract):
   {
-    "schema_version": 1,
+    "schema_version": 2,
     "generated_at": "...",
     "trips": {
       "<slug>": {
@@ -17,17 +17,24 @@ Schema (see sibling `state-schema.md` for the full contract):
         "start":   "YYYY-MM-DD",                       # trip-level: date-only
         "end":     "YYYY-MM-DD",
         "days": {
-          "YYYY-MM-DD": [                              # day key: always date-only
+          "YYYY-MM-DD": [               # day key: date-only, local when known
             {"type": "Flight|Lodging|Rail|Car Rental|...",
              "summary": "...",
              "start": "YYYY-MM-DD" | "YYYY-MM-DDTHH:MM:SSZ",  # item-level: timed VEVENTs carry time
              "end":   "YYYY-MM-DD" | "YYYY-MM-DDTHH:MM:SSZ",
+             "start_local": "YYYY-MM-DDTHH:MM:SS±HH:MM",      # v2, optional
+             "end_local":   "YYYY-MM-DDTHH:MM:SS±HH:MM",      # v2, optional
              "uid":   "..."}
           ]
         }
       }
     }
   }
+
+`start`/`end` stay the UTC instants the feed stamps. `start_local`/`end_local`
+are the same instants on the traveller's own clock, present only when the
+schedule resolved them (see `nightly-travel-sync/scripts/tripit_local_time.py`).
+Date-granular consumers read the local field and fall back to the UTC one.
 """
 
 import json
@@ -54,7 +61,7 @@ DB_PATH = "/workspace/group/travel-db.json"
 
 # Bump in lock-step with check-travel-bookings.py per
 # `coding-policy: stateful-artifacts` + state-schema.md sibling file.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _parse_day(s: str) -> date:
@@ -123,16 +130,23 @@ def main():
             item_end = _parse_day(item["end"])
             # Overlap check: item starts before trip ends AND item ends on/after trip starts
             if item_start <= trip_end and item_end >= trip_start:
-                day_key = item["start"][:10]
-                days.setdefault(day_key, []).append(
-                    {
-                        "type": item["type"],
-                        "summary": item["summary"],
-                        "start": item["start"],
-                        "end": item["end"],
-                        "uid": item["uid"],
-                    }
-                )
+                entry = {
+                    "type": item["type"],
+                    "summary": item["summary"],
+                    "start": item["start"],
+                    "end": item["end"],
+                    "uid": item["uid"],
+                }
+                # v2: carry the schedule's v3 local clock through untouched.
+                # The day key follows it when present, so a red-eye out of San
+                # Francisco at 11:05 PM files under the night it leaves rather
+                # than the UTC morning it becomes (#268).
+                for field in ("start_local", "end_local"):
+                    value = item.get(field)
+                    if isinstance(value, str) and value:
+                        entry[field] = value
+                day_key = (entry.get("start_local") or entry["start"])[:10]
+                days.setdefault(day_key, []).append(entry)
 
         # Sort each day's events by type for readability
         TYPE_ORDER = {"Flight": 0, "Rail": 1, "Lodging": 2, "Car Rental": 3}

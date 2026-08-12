@@ -67,7 +67,14 @@ _TRIP_WINDOW_TRAIL = timedelta(hours=24)
 # skew relaxes suppression rather than escalating work. A record with no
 # schema_version is legacy-implicit v1 (the owner's migration policy) and read
 # normally.
-_ACCEPTED_TRAVEL_DB_SCHEMA_VERSION = 1
+#
+# Both accepted versions parse identically here: v2 only ADDS optional
+# `start_local`/`end_local` to day items, and this gate reads trip-level
+# `start`/`end` alone. Dual-accept per `coding-policy: stateful-artifacts`
+# keeps the rollout zero-skew — the on-disk DB stays v1 until the next
+# nightly rebuild, so a v2-only reader would fail open on every cycle in
+# between.
+_ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS = frozenset({1, 2})
 
 
 @dataclass(frozen=True)
@@ -79,7 +86,7 @@ class TripWindow:
 
 
 def _is_accepted_version(version: object) -> bool:
-    """True only for a real int equal to the accepted schema version.
+    """True only for a real int among the accepted schema versions.
 
     Type-strict on purpose: `bool` is an int subclass and `1.0 == 1`, so a
     malformed stamp (`true`, `1.0`, `"1"`) must be rejected rather than coerced
@@ -88,7 +95,7 @@ def _is_accepted_version(version: object) -> bool:
     return (
         isinstance(version, int)
         and not isinstance(version, bool)
-        and version == _ACCEPTED_TRAVEL_DB_SCHEMA_VERSION
+        and version in _ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS
     )
 
 
@@ -150,7 +157,7 @@ def evaluate_trip_window(*, now_utc: datetime, path: str | None = None) -> TripW
         return TripWindow(
             True,
             f"travel-db schema_version {version!r} not accepted "
-            f"(reader at {_ACCEPTED_TRAVEL_DB_SCHEMA_VERSION}) — failing open",
+            f"(reader accepts {sorted(_ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS)}) — failing open",
         )
 
     trips = parsed.get("trips") if isinstance(parsed, dict) else None

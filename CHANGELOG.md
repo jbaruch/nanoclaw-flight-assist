@@ -1,5 +1,29 @@
 # Changelog
 
+### Fixed — a night spent on a red-eye home was billed as a missing hotel
+
+The gap check told the operator they had no hotel for Aug 22. They were on a plane: the Residence Inn checked out at noon, and WN1683 left San Francisco at 11:05 PM that night and landed in Nashville the next morning.
+
+TripIt's ICS feed stamps every timed event in UTC and never emits a `TZID`, so an 11:05 PM PDT departure arrives as `20260823T060500Z`. Every consumer that sliced the date off that instant filed the departure on the 23rd. The 22nd was then a night with no flight and no hotel — a gap, by a rule that was reading the wrong calendar. Eight of the 64 events in the live schedule shift date this way, so this was never one unlucky booking.
+
+The local clock was never actually lost. `DESCRIPTION` renders the itinerary the way TripIt displays it, and prints the local time for both halves of a segment. A printed wall clock plus a known UTC instant determines the UTC offset: the two clocks differ by the offset modulo 24 hours, and one candidate falls inside the inhabited range. No zone database, no airport-to-zone table, no network call — `skills/nightly-travel-sync/scripts/tripit_local_time.py` does the arithmetic and resolved all 64 live records with no ambiguity.
+
+Reconstruction fails closed. A record whose clock is missing, unparseable, or genuinely ambiguous gets no local stamp and its readers stay on the UTC date they already used. The one ambiguous band is real: the inhabited offsets span 26 hours, so a clock 11 hours behind UTC is equally consistent with +13:00 a day over. Two candidates is a refusal rather than a coin flip, because a guessed local date moves a night while a missing one changes nothing.
+
+Neither half of a record inherits the other's offset. A segment landing in another zone prints its own arrival clock, which is that half's authority. A single-location record — lodging, a car rental — gets a start stamp and no end stamp: TripIt pads those to a synthetic one-hour DTEND it renders nowhere, so no printed clock stands behind the end, and carrying the start's offset across it would assert an offset a DST transition inside the span could have changed. One stay is two records anyway, check-in and check-out, each printing its own clock.
+
+A second false alarm fell out of the same root cause. A San Francisco turnaround that flies out in the morning and takes the red-eye straight back spends no night on the ground, but its arrival lands inside the trip window rather than past it, and the old "still in transit at the end" test read that as landed-and-staying-over. The overnight span is what marks a red-eye home, not the arrival date. A night the scan already found uncovered now overrides that test either way — how a trip ends says nothing about the nights in the middle of it.
+
+Both alerts were false and both are gone; the four real gaps in the live schedule report unchanged.
+
+### Changed — `travel-schedule.json` v3 and `travel-db.json` v2 carry the traveller's clock
+
+Both artifacts gain optional `start_local` / `end_local` stamps beside the UTC instants they already carried, and `travel-db.json`'s day key follows the local date where one exists. The UTC fields are untouched, so the bumps are additive and every reader that compares instants is unaffected.
+
+Readers accept both versions for the rollout window: the files on disk stay at the old version until the next nightly rebuild, and a single-version reader would have failed open (`trip_window.py`) or hard-errored the whole brief (`check-travel-bookings.py`) on every cycle in between. Verified against the live schedule — the patched code on an unrebuilt DB reproduces today's output exactly.
+
+`check-travel-bookings/state-schema.md` claimed a bump here needed lock-step with the host pre-spawn gate in jbaruch/nanoclaw. It does not: `src/host-plugins/flight-assist-spawn-gate.ts` reads trip-level `start`/`end` and never `schema_version`, so a version bump is invisible to it. A trip-level shape change is what would need coordinating there.
+
 ## 0.2.112 — 2026-08-10
 
 ### Changed — the held seat's cabin is resolved, not asked for

@@ -71,14 +71,26 @@ TRANSPORT_GAP_ASK_ISSUE = "отель есть, рейса нет — едешь
 # Legacy data lacking schema_version is treated as implicit v1 (the
 # field was introduced at v1; no prior version exists). Higher
 # versions are forward-incompatible — return None / skip the entry.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# v2 only ADDS optional `start_local`/`end_local` to day items, so a v1 DB
+# reads with the local fields simply absent. Accepting both keeps the rollout
+# zero-skew per `coding-policy: stateful-artifacts`: the on-disk DB stays v1
+# until the next nightly rebuild, and a v2-only reader would hard-error the
+# whole brief in between. The same set gates the snooze store, whose entries
+# carry their own stamp and whose shape did not change at v2.
+_ACCEPTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 
 
 def _schema_compatible(value) -> bool:
-    """Accept v1 explicitly OR legacy data with no schema_version."""
+    """Accept an accepted version explicitly OR legacy data with no schema_version."""
     if value is None:
         return True
-    return isinstance(value, int) and not isinstance(value, bool) and value == SCHEMA_VERSION
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value in _ACCEPTED_SCHEMA_VERSIONS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +272,26 @@ def classify_trip(items: list[dict], trip_start: date, trip_end: date, today: da
 # ---------------------------------------------------------------------------
 
 
+def _item_day(event: dict, field: str) -> date:
+    """The traveller's calendar date for a day item's `start` or `end`.
+
+    Prefers the v2 `<field>_local` stamp — the same instant on the clock the
+    traveller was reading — and falls back to the UTC `<field>` a v1 DB
+    carries alone. A red-eye leaving San Francisco at 11:05 PM is an 06:05Z
+    event the next day, so the UTC fallback books that departure a day late
+    and the night it covers reads as a night owed a hotel (#268).
+
+    `[:10]` slices the date off either shape: `YYYY-MM-DD`, the UTC
+    `YYYY-MM-DDTHH:MM:SSZ`, and the local `YYYY-MM-DDTHH:MM:SS±HH:MM` all
+    carry it in the same leading ten characters. Gap classification is
+    day-granular, so the time is intentionally discarded. Raises the same
+    `KeyError`/`TypeError`/`ValueError` the caller already catches per item.
+    """
+    local = event.get(f"{field}_local")
+    raw = local if isinstance(local, str) and local else event[field]
+    return date.fromisoformat(raw[:10])
+
+
 def load_trips_from_db(db_path: str) -> list[dict] | None:
     """
     Load trips from travel-db.json.
@@ -341,8 +373,8 @@ def load_trips_from_db(db_path: str) -> list[dict] | None:
                             {
                                 "item_type": ev["type"],
                                 "summary": ev["summary"],
-                                "dtstart": date.fromisoformat(ev["start"][:10]),
-                                "dtend": date.fromisoformat(ev["end"][:10]),
+                                "dtstart": _item_day(ev, "start"),
+                                "dtend": _item_day(ev, "end"),
                                 "uid": ev.get("uid", ""),
                             }
                         )
@@ -463,14 +495,11 @@ def main():
         uncovered = classification.get("uncovered_nights", [])
         trip_nights = (trip_end - trip_start).days
         # A transport-only trip with no lodging needs a hotel unless the
-        # traveller is still in transit at the end of the trip window: a
-        # same-day round trip (whose return arrival often slips past UTC
-        # midnight) or a red-eye lands at or after trip_end, so no night
-        # is spent staying at a destination. When the latest transport
-        # arrival within the trip falls before trip_end, the traveller
-        # has landed and is staying over — a missing hotel is a real gap
-        # even when the lone travel night leaves uncovered empty. A
-        # zero-night day trip needs no hotel at all.
+        # traveller never stops travelling: a same-day round trip runs past
+        # the window's end, so no night is spent staying at a destination.
+        # An arrival that lands before the end means they arrived and are
+        # staying over — a real gap even when the lone travel night leaves
+        # uncovered empty. A zero-night day trip needs no hotel.
         trip_arrivals = [
             i["dtend"]
             for i in items
@@ -479,8 +508,29 @@ def main():
             and i.get("dtend") is not None
             and trip_start <= i["dtstart"] < trip_end
         ]
-        in_transit_through_end = bool(trip_arrivals) and max(trip_arrivals) >= trip_end
-        trip_needs_lodging = trip_nights >= 1 and not in_transit_through_end
+        # A red-eye home lands inside the window rather than past it, so the
+        # arrival date alone reads it as "arrived and staying over" and a
+        # hotel-free turnaround got flagged as a missing booking (#268). The
+        # overnight span is what marks it: a segment that leaves one day and
+        # lands on the trip's final day was the last night, spent in the air.
+        # Only the local dates make that visible — in UTC the departure and
+        # the arrival collapse onto the same calendar day.
+        trip_last_day = trip_end - timedelta(days=1)
+        red_eye_home = any(
+            i["dtend"] == trip_last_day and i["dtstart"] < i["dtend"]
+            for i in items
+            if i.get("item_type") in ("Flight", "Rail")
+            and i.get("dtstart") is not None
+            and i.get("dtend") is not None
+        )
+        in_transit_through_end = bool(trip_arrivals) and (
+            max(trip_arrivals) >= trip_end or red_eye_home
+        )
+        # A night the scan already found uncovered settles it: the traveller
+        # is on the ground somewhere with no bed booked, and how the trip
+        # ENDS cannot excuse a night in the middle of it. Only a trip with no
+        # uncovered night at all leans on the in-transit test.
+        trip_needs_lodging = trip_nights >= 1 and (bool(uncovered) or not in_transit_through_end)
         if classification["is_empty"]:
             issue = "ничего не забукано"
         elif (

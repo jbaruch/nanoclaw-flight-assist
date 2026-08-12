@@ -13,20 +13,22 @@ Flat list of upcoming TripIt events, projected from the live ICS feed.
   - `scripts/check-travel-freshness.py` (same plugin, Step 3 reads **mtime only**, never the body)
   - `nanoclaw-admin`'s `morning-brief` and `check-cfps` (cross-plugin via the shared `/workspace/group/` mount, reading Trip-type records for travel-conflict checks)
 
-### Shape (schema_version 2)
+### Shape (schema_version 3)
 
 A JSON array. Each element is one event record:
 
 ```json
 [
   {
-    "schema_version": 2,
-    "summary": "Madrid trip",
-    "start": "2026-06-01",
-    "end": "2026-06-05",
-    "location": "Madrid, ES",
-    "type": "Trip",
-    "uid": "trip-100@tripit.com",
+    "schema_version": 3,
+    "summary": "WN1683 SFO to BNA",
+    "start": "2026-08-23T06:05:00Z",
+    "end": "2026-08-23T10:30:00Z",
+    "start_local": "2026-08-22T23:05:00-07:00",
+    "end_local": "2026-08-23T05:30:00-05:00",
+    "location": "San Francisco (SFO)",
+    "type": "Flight",
+    "uid": "item-f42d5244@tripit.com",
     "description": "..."
   }
 ]
@@ -34,17 +36,24 @@ A JSON array. Each element is one event record:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | integer | yes | Currently `2`. Present on every record (the artifact is a bare array, with no top-level object to hold a single version). |
+| `schema_version` | integer | yes | Currently `3`. Present on every record (the artifact is a bare array, with no top-level object to hold a single version). |
 | `summary` | string | yes | Event title from the ICS `SUMMARY`. |
-| `start` / `end` | string | yes | `YYYY-MM-DD` for date-only VEVENTs (trip wrappers). `YYYY-MM-DDTHH:MM:SSZ` for timed VEVENTs (flights, lodging check-ins, rentals). |
+| `start` / `end` | string | yes | `YYYY-MM-DD` for date-only VEVENTs (trip wrappers). `YYYY-MM-DDTHH:MM:SSZ` for timed VEVENTs (flights, lodging check-ins, rentals). Always UTC — the feed emits no `TZID`. |
+| `start_local` / `end_local` | string | no | The same instants on the traveller's own clock, `YYYY-MM-DDTHH:MM:SS±HH:MM` (**added in v3**). Timed records only, and each half only when its OWN printed clock resolved — an arrival carries the destination's offset, and neither half ever inherits the other's. A single-location record (lodging, car rental) gets a `start_local` and no `end_local`. Reconstruction and its refusal conditions live in `scripts/tripit_local_time.py` — do not restate them here. |
 | `location` | string | no | ICS `LOCATION`. |
 | `type` | string | yes | `Trip` (trip-level wrapper) or the item `[Type]` from the ICS DESCRIPTION (`Flight`, `Lodging`, `Rail`, `Car Rental`, …). `Unknown` when absent. |
 | `uid` | string | yes | ICS `UID`. Trip wrappers lack `item-`. Items contain it. |
 | `description` | string | no | The ICS `DESCRIPTION` verbatim (**added in v2**). Carries the `[Type] <DEP> to <ARR>` line drive-engine's TripIt-union parser reads for a Flight's route (#156 R2). Additive — readers that don't use it are unaffected. |
 
+Any consumer reducing a timed record to a calendar date reads `start_local` / `end_local` first and falls back to the UTC field. A record without them is not an error — it is a record whose local clock the feed did not print readably.
+
 ### v1 → v2
 
 Additive: the record gains the optional `description` field. No stored state to migrate — the schedule is regenerated in full each run, so the next Step 2 emits v2 records. Cross-plugin readers that gate on the version must accept v2: `travel-core/trip_origin.py` bumped its `SCHEDULE_SCHEMA_VERSION` to `2` (it does not read `description`, so it reads v1 and v2 identically).
+
+### v2 → v3
+
+Additive: the record gains the optional `start_local` / `end_local` fields (#268). No stored state to migrate — the schedule is regenerated in full each run, so the next Step 2 emits v3 records. `travel-core/trip_origin.py` bumped its `SCHEDULE_SCHEMA_VERSION` to `3`; it reads instants rather than dates and does not read the local fields, so v2 and v3 read identically there. The gate accepts every version at or below its constant, so v2 records on disk during the rollout window still read.
 
 ### Lifecycle
 

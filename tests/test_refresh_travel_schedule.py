@@ -434,6 +434,93 @@ def test_output_carries_required_keys(refresh_travel_schedule, monkeypatch, caps
         assert ev["schema_version"] == module.SCHEMA_VERSION
 
 
+# ---------------------------------------------------------------------------
+# v3 local stamps (#268)
+# ---------------------------------------------------------------------------
+
+
+def _red_eye_ics():
+    """A timed VEVENT whose UTC date is a day past the traveller's own.
+    `DESCRIPTION` prints the departure at 11:05 PM PDT and the arrival at
+    5:30 AM CDT, exactly as the TripIt feed renders a red-eye."""
+    return _ics(
+        [
+            ("DTSTART", "20260523T060500Z"),
+            ("DTEND", "20260523T103000Z"),
+            ("SUMMARY", "WN1683 SFO to BNA"),
+            ("UID", "item-500@tripit.com"),
+            (
+                "DESCRIPTION",
+                "11:05 PM PDT\\n[Flight] SFO to BNA\\n \\n\\nSouthwest Airlines 1683\\n"
+                " \\n\\n \\nSat\\, May 23\\n5:30 AM CDT\\nArrive Nashville (BNA)\\n",
+            ),
+        ],
+    )
+
+
+def test_timed_event_emits_local_stamps(refresh_travel_schedule, monkeypatch, capsys):
+    """v3 adds the traveller's own clock beside the UTC instants. The feed
+    stamps this departure 06:05Z on May 23; the traveller boarded at 11:05 PM
+    on May 22, and every date-granular consumer downstream needs to see the
+    22nd or it books the night onto a hotel that was never needed (#268)."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    _patch_urlopen(monkeypatch, _red_eye_ics())
+
+    _run(module, monkeypatch, capsys)
+    events = json.loads(output_path.read_text())
+    assert events[0]["start"] == "2026-05-23T06:05:00Z"
+    assert events[0]["start_local"] == "2026-05-22T23:05:00-07:00"
+    assert events[0]["end_local"] == "2026-05-23T05:30:00-05:00"
+    assert events[0]["schema_version"] == 3
+
+
+def test_date_only_event_gets_no_local_stamps(refresh_travel_schedule, monkeypatch, capsys):
+    """A `VALUE=DATE` wrapper has no time-of-day to localise. Stamping one
+    would invent a precision the feed never carried."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    body = _ics(
+        [
+            ("DTSTART", "20260601"),
+            ("DTEND", "20260605"),
+            ("SUMMARY", "Madrid"),
+            ("UID", "trip-1@tripit.com"),
+            ("DESCRIPTION", ""),
+        ],
+    )
+    _patch_urlopen(monkeypatch, body)
+
+    _run(module, monkeypatch, capsys)
+    events = json.loads(output_path.read_text())
+    assert "start_local" not in events[0]
+    assert "end_local" not in events[0]
+
+
+def test_unresolvable_local_time_omits_the_stamps(refresh_travel_schedule, monkeypatch, capsys):
+    """A timed record whose DESCRIPTION prints no readable clock keeps its
+    UTC fields and gains nothing else — readers fall back to the UTC dates
+    they used at v2 rather than receiving a guessed local date."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    body = _ics(
+        [
+            ("DTSTART", "20260522T070000Z"),
+            ("DTEND", "20260522T140000Z"),
+            ("SUMMARY", "DL23 MUC to DTW"),
+            ("UID", "item-300@tripit.com"),
+            ("DESCRIPTION", "[Flight] MUC to DTW"),
+        ],
+    )
+    _patch_urlopen(monkeypatch, body)
+
+    _run(module, monkeypatch, capsys)
+    events = json.loads(output_path.read_text())
+    assert events[0]["start"] == "2026-05-22T07:00:00Z"
+    assert "start_local" not in events[0]
+    assert "end_local" not in events[0]
+
+
 def test_stdout_breakdown_summary(refresh_travel_schedule, monkeypatch, capsys):
     """The script's stdout is a JSON run summary — event count + a
     Counter-based type breakdown — the operator-facing signal in nightly
