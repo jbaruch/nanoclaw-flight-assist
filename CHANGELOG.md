@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.113 — 2026-08-12
+
 ### Fixed — a night spent on a red-eye home was billed as a missing hotel
 
 The gap check told the operator they had no hotel for Aug 22. They were on a plane: the Residence Inn checked out at noon, and WN1683 left San Francisco at 11:05 PM that night and landed in Nashville the next morning.
