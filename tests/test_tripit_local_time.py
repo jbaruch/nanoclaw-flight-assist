@@ -8,8 +8,9 @@ Locks down the documented contract per `coding-policy: testing-standards`:
   - `local_times` reads the departure clock printed above a record's
     `[Type]` marker and the arrival clock printed above its `Arrive` line,
     resolving each half against its own instant
-  - A record with one location and one clock (lodging, car rental) carries
-    the start's offset to its end
+  - Neither half ever inherits the other's offset: a record with one
+    location and one clock (lodging, car rental) gets a start stamp and no
+    end stamp
   - Every unresolvable shape fails closed (None), never a guessed date
 
 Fixtures are the DESCRIPTION bodies TripIt actually emits, escapes included
@@ -165,15 +166,18 @@ def test_day_header_above_the_clock_is_skipped(tripit_local_time):
     assert start.isoformat() == "2026-08-17T06:20:00-05:00"
 
 
-def test_single_location_record_carries_the_start_offset(tripit_local_time):
-    """Lodging has one clock. Its `Arrive` sits inside the marker line, so
-    the end takes the start's offset instead of resolving a second zone."""
+def test_single_location_record_stamps_only_its_start(tripit_local_time):
+    """Lodging prints one clock, and its `Arrive` sits inside the marker line
+    rather than on a line of its own. The end is TripIt's synthetic one-hour
+    pad, rendered nowhere, so nothing authoritative stands behind it —
+    borrowing the start's offset would assert one that could have changed in
+    between (a DST transition inside the span)."""
     start, end = tripit_local_time.local_times(
         _utc(2026, 8, 17, 22, 0), _utc(2026, 8, 17, 23, 0), CHECK_IN
     )
-    assert start is not None and end is not None
+    assert start is not None
     assert start.isoformat() == "2026-08-17T15:00:00-07:00"
-    assert end.isoformat() == "2026-08-17T16:00:00-07:00"
+    assert end is None
 
 
 def test_check_in_line_is_not_read_as_a_clock(tripit_local_time):

@@ -150,11 +150,16 @@ def local_times(
     instant carrying the reconstructed offset, so `.isoformat()` renders the
     traveller's own date and clock.
 
-    A record whose DESCRIPTION prints a second clock under an `Arrive` line
-    (a segment that lands in another zone) resolves that half independently;
-    the arrival's offset is its destination's, never the departure's. A record
-    with one location and one clock (lodging, a car rental) carries the start's
-    offset to its end.
+    Each half resolves against its OWN printed clock and never inherits the
+    other's offset. A segment landing in another zone prints a second clock
+    under an `Arrive` line, and that clock is the arrival's authority. A
+    record with one location and one clock (lodging, a car rental) gets a
+    start stamp and no end stamp: TripIt pads those to a synthetic one-hour
+    DTEND it never renders, so no printed clock stands behind the end, and
+    carrying the start's offset over would assert an offset that could have
+    changed in between (a DST transition inside the span). One stay is two
+    records here, check-in and check-out, each printing its own clock, so the
+    end an unstamped record leaves behind is one nothing needed.
     """
     lines = [line.strip() for line in _unescape(description).splitlines()]
 
@@ -171,7 +176,7 @@ def local_times(
 
     arrival_line = next((i for i, line in enumerate(lines) if _ARRIVE_RE.match(line)), None)
     if arrival_line is None:
-        return local_start, _apply(end, start_offset)
+        return local_start, None
     arrival = _clock_above(lines, arrival_line)
     if arrival is None:
         return local_start, None

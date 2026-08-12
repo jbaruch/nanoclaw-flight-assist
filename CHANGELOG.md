@@ -10,6 +10,8 @@ The local clock was never actually lost. `DESCRIPTION` renders the itinerary the
 
 Reconstruction fails closed. A record whose clock is missing, unparseable, or genuinely ambiguous gets no local stamp and its readers stay on the UTC date they already used. The one ambiguous band is real: the inhabited offsets span 26 hours, so a clock 11 hours behind UTC is equally consistent with +13:00 a day over. Two candidates is a refusal rather than a coin flip, because a guessed local date moves a night while a missing one changes nothing.
 
+Neither half of a record inherits the other's offset. A segment landing in another zone prints its own arrival clock, which is that half's authority. A single-location record — lodging, a car rental — gets a start stamp and no end stamp: TripIt pads those to a synthetic one-hour DTEND it renders nowhere, so no printed clock stands behind the end, and carrying the start's offset across it would assert an offset a DST transition inside the span could have changed. One stay is two records anyway, check-in and check-out, each printing its own clock.
+
 A second false alarm fell out of the same root cause. A San Francisco turnaround that flies out in the morning and takes the red-eye straight back spends no night on the ground, but its arrival lands inside the trip window rather than past it, and the old "still in transit at the end" test read that as landed-and-staying-over. The overnight span is what marks a red-eye home, not the arrival date. A night the scan already found uncovered now overrides that test either way — how a trip ends says nothing about the nights in the middle of it.
 
 Both alerts were false and both are gone; the four real gaps in the live schedule report unchanged.

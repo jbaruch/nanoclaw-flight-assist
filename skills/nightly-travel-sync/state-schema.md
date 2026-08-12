@@ -39,7 +39,7 @@ A JSON array. Each element is one event record:
 | `schema_version` | integer | yes | Currently `3`. Present on every record (the artifact is a bare array, with no top-level object to hold a single version). |
 | `summary` | string | yes | Event title from the ICS `SUMMARY`. |
 | `start` / `end` | string | yes | `YYYY-MM-DD` for date-only VEVENTs (trip wrappers). `YYYY-MM-DDTHH:MM:SSZ` for timed VEVENTs (flights, lodging check-ins, rentals). Always UTC — the feed emits no `TZID`. |
-| `start_local` / `end_local` | string | no | The same instants on the traveller's own clock, `YYYY-MM-DDTHH:MM:SS±HH:MM` (**added in v3**). Timed records only, and only when the offset resolved. Each half of a segment resolves against its own printed clock, so an arrival carries the destination's offset. Reconstruction and its refusal conditions live in `scripts/tripit_local_time.py` — do not restate them here. |
+| `start_local` / `end_local` | string | no | The same instants on the traveller's own clock, `YYYY-MM-DDTHH:MM:SS±HH:MM` (**added in v3**). Timed records only, and each half only when its OWN printed clock resolved — an arrival carries the destination's offset, and neither half ever inherits the other's. A single-location record (lodging, car rental) gets a `start_local` and no `end_local`. Reconstruction and its refusal conditions live in `scripts/tripit_local_time.py` — do not restate them here. |
 | `location` | string | no | ICS `LOCATION`. |
 | `type` | string | yes | `Trip` (trip-level wrapper) or the item `[Type]` from the ICS DESCRIPTION (`Flight`, `Lodging`, `Rail`, `Car Rental`, …). `Unknown` when absent. |
 | `uid` | string | yes | ICS `UID`. Trip wrappers lack `item-`. Items contain it. |
