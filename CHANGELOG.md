@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.114 — 2026-08-13
+
 ### Fixed — a shipped fix that sat there for a day and a half doing nothing
 
 #267 landed on the 12th. The morning brief on the 13th still reported the same eight trips needing bookings, four of which had been false the whole time. The code was correct, deployed, and completely inert.
