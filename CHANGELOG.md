@@ -1,5 +1,23 @@
 # Changelog
 
+### Fixed — a shipped fix that sat there for a day and a half doing nothing
+
+#267 landed on the 12th. The morning brief on the 13th still reported the same eight trips needing bookings, four of which had been false the whole time. The code was correct, deployed, and completely inert.
+
+`nightly-travel-sync`'s precheck decides whether to wake the bundle by looking at exactly one thing: how old `travel-db.json` is. The DB was built at 11:01Z on the 12th, three and a half hours before the fix merged. At the 06:01 fire on the 13th it was 24 hours old, comfortably under the 60-hour cap, so the precheck did what it was told and skipped. The rebuild that would have activated the fix was scheduled for the 14th at 23:01Z. A day and a half of a brief confidently reporting numbers we had already fixed.
+
+The precheck knew the file's age and nothing about its contents. Fresh by mtime, stale by schema — the two are independent, and only one was being checked. It now reads the DB's `schema_version` and wakes when it sits below the version `build-travel-db.py` emits, so a schema-bumping fix activates on the next fire instead of idling until the file happens to age out. An unreadable, unstamped, or non-object DB reads the same way: it cannot be at the current schema, so rebuild it.
+
+A DB stamped *above* the precheck's constant is the one case that does not wake. There the precheck is the lagging side, and waking would only drive the builder into its refuse-to-downgrade guard; the age cap governs instead.
+
+The constant is mirrored rather than imported — the precheck runs host-side on the cadence-registry, where the builder's plugin mount is not on the path, and it is stdlib-only by contract. A test asserts the mirror against `build-travel-db.py`'s own `SCHEMA_VERSION`, so drift fails CI rather than surfacing as another quiet day of stale data.
+
+### Changed — travel data refreshes daily instead of every third day
+
+The 60-hour cap encoded an every-third-day refresh. `morning-brief` reads `travel-db.json` every morning, so travel gaps could lag reality by up to two and a half days — long enough for a hotel you already booked to keep getting flagged for two more briefs.
+
+Now 20 hours. Not 24, for the same reason it was never 72: the DB stamps at run completion, so a cap on the exact cron multiple near-misses. The next daily fire finds the file 23.9 hours old, reads it as fresh, skips, and the daily refresh quietly becomes every-other-day — jbaruch/nanoclaw#803, which the 60-under-72 cap existed to dodge. 20 leaves margin for run latency and DST.
+
 ## 0.2.113 — 2026-08-12
 
 ### Fixed — a night spent on a red-eye home was billed as a missing hotel

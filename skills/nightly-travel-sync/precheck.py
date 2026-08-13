@@ -2,10 +2,11 @@
 """Cadence precheck for `tessl__nightly-travel-sync`.
 
 Fires daily via the cadence-registry (`0 6 * * * (TZ=local)`). Gates the
-wake on a 60-hour filesystem cadence cap anchored on the bundle's terminal
-artifact, `/workspace/group/travel-db.json` — the file Step 4 rebuilds
-last and the one downstream consumers (`check-travel-bookings`,
-`morning-brief`) actually read.
+wake on a filesystem cadence cap plus a schema-currency check, both
+anchored on the bundle's terminal artifact,
+`/workspace/group/travel-db.json` — the file Step 4 rebuilds last and the
+one downstream consumers (`check-travel-bookings`, `morning-brief`)
+actually read.
 
 Anchoring on travel-db.json rather than travel-schedule.json is
 deliberate: travel-schedule.json (Step 2's output) bumps on every
@@ -19,10 +20,20 @@ separate cursor file is owned, so the gate adds no self-owned state per
 
 Wake conditions:
   - travel-db.json missing (cold start, or pruned) — wake.
-  - travel-db.json mtime older than CADENCE (60h) — wake.
   - mtime in the future (clock skew / bad write) — wake so the next run
     rewrites it.
-  - within cadence — skip silently.
+  - on-disk schema_version below the builder's — wake, so a shipped
+    schema bump activates on the next fire instead of idling until the
+    DB happens to age past the cadence cap (#268).
+  - travel-db.json mtime older than CADENCE — wake.
+  - fresh and at the current schema — skip silently.
+
+Age alone is a schema-blind signal: a DB written before a
+schema-bumping fix shipped is "fresh" by mtime and stale by content, and
+the fix stays inert until the cap elapses. #267's traveller-local trip
+dates landed that way — merged 08-12, still not in effect on 08-13's
+brief, and not due to rebuild until 08-14. The schema check closes that
+window; the cadence cap keeps handling ordinary staleness.
 
 Scheduled-task contract: emits single-line JSON `{"wake_agent": <bool>,
 "data": {...}}` on stdout, exit 0 always (per agent-runner contract — a
@@ -44,14 +55,48 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# 60h, deliberately NOT the exact 3-day (72h) multiple of the daily cron. The
-# cursor stamps at run completion, so an exact-multiple cap near-misses: every
-# third daily fire finds the cursor ~71.8h old (< 72h) and skips forever, slipping
-# the run by a whole period (jbaruch/nanoclaw#803). 60h keeps the every-third-day
-# intent while sitting a half-period under the multiple, with slack for run
-# latency and DST — see nanoclaw-host: rules/overlay-tile-authoring.md.
-CADENCE = timedelta(hours=60)
+# 20h — a daily refresh, deliberately NOT the exact 24h multiple of the daily
+# cron. The DB stamps at run completion, so an exact-multiple cap near-misses:
+# the next daily fire finds it ~23.9h old (< 24h) and skips, slipping the run to
+# every other day (jbaruch/nanoclaw#803, which the earlier 60h-under-72h cap
+# encoded the same way). 20h sits a comfortable margin under the multiple, with
+# slack for run latency and DST — see nanoclaw-host:
+# rules/overlay-tile-authoring.md. `morning-brief` reads travel-db.json daily,
+# so anything longer lets a booked hotel get nagged for days (#268).
+CADENCE = timedelta(hours=20)
+
+# The schema `check-travel-bookings/scripts/build-travel-db.py` emits. Mirrored
+# rather than imported: this precheck runs host-side on the cadence-registry,
+# where the builder's plugin mount is not on the path, and the module is
+# stdlib-only by contract. `tests/test_nightly_travel_sync_precheck.py` asserts
+# the mirror against the builder's own SCHEMA_VERSION, so drift fails CI.
+EXPECTED_DB_SCHEMA_VERSION = 2
+
 DEFAULT_DB_PATH = "/workspace/group/travel-db.json"
+
+
+def _db_schema_version(db_path: Path) -> int | None:
+    """The DB's on-disk `schema_version`, or None when it cannot be read.
+
+    None covers an unreadable, malformed, or non-object DB, and one with
+    no `schema_version` stamp (per `check-travel-bookings/state-schema.md`,
+    legacy unstamped data is implicit v1). Every one of those means "not
+    at the current schema", so `decide()` treats None and a low stamp
+    alike: rebuild. This is a non-owner read of a `check-travel-bookings`
+    artifact — it never writes and never migrates, per
+    `jbaruch/coding-policy: stateful-artifacts`.
+    """
+    try:
+        with db_path.open(encoding="utf-8") as f:
+            db = json.load(f)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(db, dict):
+        return None
+    version = db.get("schema_version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    return version
 
 
 def decide(now_utc: datetime, db_path: Path) -> dict:
@@ -72,6 +117,19 @@ def decide(now_utc: datetime, db_path: Path) -> dict:
                 "reason": "db_mtime_future",
                 "mtime": mtime.isoformat(),
                 "age_hours": age_hours,
+            },
+        }
+
+    schema_version = _db_schema_version(db_path)
+    if schema_version is None or schema_version < EXPECTED_DB_SCHEMA_VERSION:
+        return {
+            "wake_agent": True,
+            "data": {
+                "reason": "db_schema_stale",
+                "mtime": mtime.isoformat(),
+                "age_hours": age_hours,
+                "db_schema_version": schema_version,
+                "expected_schema_version": EXPECTED_DB_SCHEMA_VERSION,
             },
         }
 
