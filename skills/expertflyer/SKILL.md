@@ -191,7 +191,9 @@ Then run Step 3 once per flight, adding `--date-fallback`. Read `date_fallback_a
 Report only the flights that need something:
 
 - `upgrade` → name the flight and `best_upgrade`
-- `cabin_openings` non-empty → name the cabin and seat, and say it needs a fare change or an upgrade, never a seat selection
+- `cabin_openings` non-empty → name the cabin and the seat
+- say a `cabin_openings` seat needs a fare change or an upgrade
+- never report a `cabin_openings` seat as a seat selection
 - `optimal` → one line that the seat holds up across `cabins_scanned`, or nothing when the operator asked only for problems
 - `no_held_seat`, `held_position_unknown`, `nothing_open`, `held_cabin_mismatch` or `held_cabin_unresolved` → name the flight as unanswered, never as fine
 - `cabins_absent` covering the held cabin → report it; a seat cannot be in a cabin the aircraft lacks

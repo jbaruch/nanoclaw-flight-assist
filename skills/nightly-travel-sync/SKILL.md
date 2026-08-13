@@ -1,6 +1,6 @@
 ---
 name: nightly-travel-sync
-description: "Travel-data refresh bundle: TripIt → Reclaim timezone sync, refresh travel-schedule.json from the TripIt iCal feed with a two-tier Gmail freshness probe, rebuild travel-db.json, log newly-appeared trips to daily memory, then check upcoming trips for booking gaps. Runs daily; precheck-gated on travel-db.json freshness. Triggers: 'sync trips', 'sync travel', 'update travel data', 'pull trip info', 'refresh travel schedule', 'rebuild travel db', 'check my bookings'."
+description: "Travel-data refresh bundle: TripIt → Reclaim timezone sync, refresh travel-schedule.json from the TripIt iCal feed with a two-tier Gmail freshness probe, rebuild travel-db.json, log newly-appeared trips to daily memory, then check upcoming trips for booking gaps. Runs daily; precheck-gated on travel-db.json freshness and schema currency. Triggers: 'sync trips', 'sync travel', 'update travel data', 'pull trip info', 'refresh travel schedule', 'rebuild travel db', 'check my bookings'."
 cadence: "0 6 * * * (TZ=local)"
 agentModel: "claude-haiku-4-5-20251001"
 script: "precheck.py"
@@ -10,7 +10,7 @@ script: "precheck.py"
 
 Process steps in order. Do not skip ahead.
 
-Run this bundle silently. Each step surfaces its own results via `mcp__nanoclaw__send_message`; the bundle itself adds no chat surface. The fire-time precheck (`precheck.py`) gates wake-ups on `travel-db.json` freshness — see `precheck.py` for the cadence predicate and threshold.
+Run this bundle silently. Each step surfaces its own results via `mcp__nanoclaw__send_message`; the bundle itself adds no chat surface. The fire-time precheck (`precheck.py`) gates wake-ups on `travel-db.json` freshness and schema currency — see `precheck.py` for the wake predicates and their thresholds.
 
 A step that hits a technical failure surfaces a one-line note and finishes the run. There is no mid-run continuation. Recovery is the next daily cron fire.
 
