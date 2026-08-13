@@ -12,6 +12,10 @@ A DB stamped *above* the precheck's constant is the one case that does not wake.
 
 The constant is mirrored rather than imported — the precheck runs host-side on the cadence-registry, where the builder's plugin mount is not on the path, and it is stdlib-only by contract. A test asserts the mirror against `build-travel-db.py`'s own `SCHEMA_VERSION`, so drift fails CI rather than surfacing as another quiet day of stale data.
 
+### Changed — one directive per bullet in the expertflyer seat sweep
+
+Step 4's `cabin_openings` reporting bullet was carrying three orders at once: name the cabin and seat, state the transaction it needs, and don't call it a seat selection. Now three bullets, same words, same meaning. Advisory finding deferred from #264 rather than burning a re-review round on it alone; folded in here per the boy-scout rule.
+
 ### Changed — travel data refreshes daily instead of every third day
 
 The 60-hour cap encoded an every-third-day refresh. `morning-brief` reads `travel-db.json` every morning, so travel gaps could lag reality by up to two and a half days — long enough for a hotel you already booked to keep getting flagged for two more briefs.
