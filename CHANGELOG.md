@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.115 — 2026-08-16
+
 ### Added — the account this plugin has been reading through a keyhole
 
 TripIt holds every trip Baruch has ever taken, with confirmation numbers, costs, and the hotel he stayed at in Tel Aviv in April. This plugin has been reading it through a `.ics` feed that carries a rolling ~90-day window and no PNRs. On 2026-08-15 a "where did we stay last time in Israel" question ended with an agent hand-parsing that `.ics` — the trip had aged out five days earlier, and the answer was a guess dressed as a lookup.
