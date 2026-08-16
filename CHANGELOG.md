@@ -1,5 +1,15 @@
 # Changelog
 
+### Added — the account this plugin has been reading through a keyhole
+
+TripIt holds every trip Baruch has ever taken, with confirmation numbers, costs, and the hotel he stayed at in Tel Aviv in April. This plugin has been reading it through a `.ics` feed that carries a rolling ~90-day window and no PNRs. On 2026-08-15 a "where did we stay last time in Israel" question ended with an agent hand-parsing that `.ics` — the trip had aged out five days earlier, and the answer was a guess dressed as a lookup.
+
+`jbaruch/tripit-api` is a read-only REST + MCP service over the full account, and its `using-tripit` skill is now the source-of-record for travel already booked or flown: `flight-data-locality` says so, and a second history source is forbidden on the same terms as a second flight-data API. The skill loads as a co-loaded overlay tile next to this plugin. It is not vendored here — it has its own release train, its own tests, and behaviour that keeps moving (per-endpoint scope defaults, never-retry-a-503, the truncation contract). A copy in this repo would be a second source of truth for all of it.
+
+Nothing here changes what the iCal feed does. It is the upcoming window that feeds `travel-schedule.json` and `travel-db.json`, and the nightly sync still runs on it. What it stops being is the thing an agent reaches for when the question is about the past.
+
+Plumbing, in the order it landed: nanoclaw#921 forwards `TRIPIT_API_URL` and `TRIPIT_API_TOKEN` to agent spawns (the bearer stays in the OneCLI vault — the container holds `onecli-managed` and the gateway swaps it on the wire); jbaruch/tripit-api#40 puts the service on the gateway's docker network so nothing is published on the host; jbaruch/tripit-api#41 fixed the skill's script paths, which resolved only in a repo checkout and would have sent every agent command to ENOENT; nanoclaw#924 installs the tile in the orchestrator registry.
+
 ## 0.2.114 — 2026-08-13
 
 ### Fixed — a shipped fix that sat there for a day and a half doing nothing

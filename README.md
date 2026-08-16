@@ -54,11 +54,13 @@ Store all required credentials in OneCLI vault. Never commit. See [.env.example]
 
 Gmail is not this plugin's domain, so it depends on the one tested copy of the RFC822 MIME parser and the poison sanitizer rather than re-implementing them (`nanoclaw-orders` consumes them the same way). Calendar is different — this plugin owns its per-service clients, so `google_calendar_client.py` stays self-contained here.
 
+Travel history is the same story. **`jbaruch/tripit-api`** ships the `using-tripit` skill over a read-only TripIt REST + MCP service — every trip past and upcoming, every reservation with confirmation numbers and costs. Carry it in `additionalTiles` alongside this plugin for history, PNR, and cost lookups; the `flight-data-locality` rule names it the source-of-record for travel already booked or flown. It is a separately released plugin with its own tests, not a copy living here, and the iCal feed this plugin syncs stays what it always was: the upcoming window that feeds `travel-schedule.json`. Reaching the service needs `TRIPIT_API_URL` and `TRIPIT_API_TOKEN` on the spawn (nanoclaw#921); this plugin itself calls neither.
+
 ## Rules
 
 | Rule | Summary |
 |------|---------|
-| [flight-data-locality](rules/flight-data-locality.md) | byAir is the single upstream for flight data; AeroAPI / Flighty / airline-specific APIs forbidden |
+| [flight-data-locality](rules/flight-data-locality.md) | byAir is the single upstream for flight data; AeroAPI / Flighty / airline-specific APIs forbidden. Travel already booked or flown (past trips, PNRs, costs) comes from `jbaruch/tripit-api`, never from hand-parsing the iCal feed |
 | [operator-local-tz-phrasing](rules/operator-local-tz-phrasing.md) | Relative-date words ("today"/"tomorrow") in a surface are phrased against the operator's local date (via `read-current-tz.py`), not the container UTC clock; displayed airport clock times stay as-is |
 
 ## Skills
