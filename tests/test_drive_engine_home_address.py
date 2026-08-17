@@ -137,3 +137,14 @@ def test_unparseable_schema_version_raises(tmp_path):
     )
     with pytest.raises(HomeAddressError, match="upgrade"):
         read_current_home(path=profile)
+
+
+def test_blank_current_home_does_not_read_the_next_line(tmp_path):
+    """The origin every home-anchored drive routes from must never be another
+    key's line: a blank `- current_home:` used to match `- home_airport: BNA`."""
+    profile = _write_profile(
+        tmp_path,
+        "## Addresses\n- current_home:\n- home_airport: BNA\n",
+    )
+    with pytest.raises(HomeAddressError, match="no `current_home:` entry"):
+        read_current_home(path=profile)

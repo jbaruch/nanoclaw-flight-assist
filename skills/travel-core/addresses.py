@@ -112,9 +112,14 @@ def values_in(block: str, key: str) -> tuple[str, ...]:
     Blank values are dropped — a `- home_metro:` line with nothing after it is
     an unset key, not an empty-string match that would suppress every trip
     whose destination the feed left blank.
+
+    Every gap here is horizontal whitespace, never a whitespace class that
+    includes the newline: crossing it made a blank `- current_home:` match the
+    NEXT line and read `- home_airport: BNA` as the residence to route drives
+    from.
     """
     pattern = re.compile(
-        rf"^\s*-\s*{re.escape(key)}\s*:\s*(?P<value>\S.*?)\s*$",
+        rf"^[ \t]*-[ \t]*{re.escape(key)}[ \t]*:[ \t]*(?P<value>\S.*?)[ \t]*$",
         re.MULTILINE,
     )
     return tuple(match["value"].strip() for match in pattern.finditer(block))
