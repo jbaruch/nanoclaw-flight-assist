@@ -1,5 +1,9 @@
 # Changelog
 
+### Changed — one directive per bullet in the travel-history section
+
+The advisory findings from the policy review of #272, folded into a round that was already happening (#273). Three bullets in `flight-data-locality`'s `Travel Already Booked or Flown` section carried more than one directive each: how `using-tripit` reaches the service was bundled with the overlay-tile loading and the never-vendor rule; the iCal feed's ~90-day limitation was bundled with its input contract for two artifacts. Both split, meaning unchanged. The third dropped "is the failure this section names" — incident framing belongs in the entry above, not in a rule that loads on every turn — and keeps the routing directive.
+
 ## 0.2.115 — 2026-08-16
 
 ### Added — the account this plugin has been reading through a keyhole
