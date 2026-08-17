@@ -1,6 +1,6 @@
 {
   "name": "nanoclaw-travel",
-  "mode": "vendored",
+  "mode": "managed",
   "dependencies": {
     "jbaruch/coding-policy": {
       "version": "latest"
