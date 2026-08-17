@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.118 — 2026-08-17
+
 ### Fixed — a blank address line read the next line as its value
 
 `- current_home:` with nothing after it did not read as empty. It read as `- home_airport: BNA`.
