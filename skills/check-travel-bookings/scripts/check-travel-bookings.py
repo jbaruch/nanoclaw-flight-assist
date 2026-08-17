@@ -488,7 +488,7 @@ def main():
     transport_verdicts = load_transport_gap_verdicts()
 
     # The operator's home metro, read from the trusted profile's canonical
-    # `## Addresses` block (see `travel-core/addresses.py`). Empty when the key
+    # `## Addresses` block (see `skills/travel-core/addresses.py`). Empty when the key
     # is unset, which is the pre-#271 behaviour: every trip gets checked.
     home_metro = home_metro_names()
 

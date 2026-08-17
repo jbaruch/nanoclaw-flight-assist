@@ -26,7 +26,7 @@ The script outputs JSON:
 }
 ```
 
-`local_trips` counts trips to the operator's home metro — placeholders filed to block time for a local event, with no flight and no hotel to book. They raise no gap and are not "complete" either; nothing about them was checked. The home metro is read from the trusted profile's `## Addresses` block (`travel-core/addresses.py`), and an unset key checks every trip. Do not re-derive which trips are local.
+`local_trips` counts trips to the operator's home metro. They raise no gap and are not counted as complete. The home metro is read from the trusted profile's `## Addresses` block (`skills/travel-core/addresses.py`); an unset key checks every trip. Do not re-derive which trips are local.
 
 `uncovered_nights` lists the ISO dates of trip nights with no lodging coverage. It drives the "нет отеля на N ноч." count. For the "рейсы есть, отеля нет" issue it may be empty. Complete trips report an empty array. Trip selection lives in `skills/check-travel-bookings/scripts/check-travel-bookings.py`. The skill consumes that output and does not re-derive it.
 
