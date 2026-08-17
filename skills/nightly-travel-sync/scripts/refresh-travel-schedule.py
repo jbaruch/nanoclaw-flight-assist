@@ -43,7 +43,23 @@ OUTPUT_PATH = "/workspace/group/travel-schedule.json"
 # in full from the live TripIt ICS every run (no in-place migration —
 # the writer always emits the current version, cross-plugin readers gate
 # on it). See the sibling `state-schema.md` for the owner/reader contract.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# RFC 5545 §3.3.11 TEXT escapes, as the feed writes them: `San Francisco\, CA`.
+# One pass over the string so an escaped backslash (`\\,`) yields a literal
+# backslash followed by a comma rather than being re-read as an escaped comma.
+_ICS_ESCAPE_RE = re.compile(r"\\(.)")
+_ICS_ESCAPES = {"n": "\n", "N": "\n"}
+
+
+def _unescape_ics_text(value):
+    """An ICS TEXT value with its escapes unwound (`Nashville\\, TN`).
+
+    An unknown escape yields the escaped character itself, which is what the
+    spec's `\\;` `\\,` `\\\\` set needs and the safest reading of anything else
+    TripIt emits — never a dropped character.
+    """
+    return _ICS_ESCAPE_RE.sub(lambda m: _ICS_ESCAPES.get(m.group(1), m.group(1)), value)
 
 
 def lodging_pair_key(summary, description):
@@ -197,7 +213,11 @@ def main():
                 "start_timed": start_timed,
                 "end": end,
                 "end_timed": end_timed,
-                "location": _get_field(component, "LOCATION"),
+                # v4: decoded, not verbatim. `travel-core`'s `resolve_anchor`
+                # hands this string out as a drivable address, so the feed's
+                # transport escapes were riding into the geocode request
+                # (`San Francisco\, CA`) — see the sibling state-schema.md.
+                "location": _unescape_ics_text(_get_field(component, "LOCATION")),
                 "type": event_type,
                 "uid": uid,
                 "description": description,

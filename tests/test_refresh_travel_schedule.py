@@ -472,7 +472,7 @@ def test_timed_event_emits_local_stamps(refresh_travel_schedule, monkeypatch, ca
     assert events[0]["start"] == "2026-05-23T06:05:00Z"
     assert events[0]["start_local"] == "2026-05-22T23:05:00-07:00"
     assert events[0]["end_local"] == "2026-05-23T05:30:00-05:00"
-    assert events[0]["schema_version"] == 3
+    assert events[0]["schema_version"] == 4
 
 
 def test_date_only_event_gets_no_local_stamps(refresh_travel_schedule, monkeypatch, capsys):
@@ -549,6 +549,113 @@ def test_stdout_breakdown_summary(refresh_travel_schedule, monkeypatch, capsys):
     payload = json.loads(out)
     assert payload["events_written"] == 2
     assert payload["type_breakdown"] == {"Trip": 1, "Flight": 1}
+
+
+# ---------------------------------------------------------------------------
+# v4 decoded location (#275)
+# ---------------------------------------------------------------------------
+
+
+def _located(location, uid="trip-900@tripit.com", summary="Onboarding CA 2026"):
+    """A single date-only VEVENT carrying `location` as its raw ICS LOCATION."""
+    return _ics(
+        [
+            ("DTSTART", "20260601"),
+            ("DTEND", "20260605"),
+            ("SUMMARY", summary),
+            ("LOCATION", location),
+            ("UID", uid),
+            ("DESCRIPTION", ""),
+        ],
+    )
+
+
+def test_location_commas_are_decoded(refresh_travel_schedule, monkeypatch, capsys):
+    """RFC 5545 escapes commas in TEXT, so the feed sends `San Francisco\\, CA`.
+    `trip_origin.resolve_anchor` hands this field out as a drivable address, so
+    the backslash was riding into the geocode request (#275)."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    _patch_urlopen(monkeypatch, _located("San Francisco\\, CA"))
+
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    events = json.loads(output_path.read_text())
+    assert events[0]["location"] == "San Francisco, CA"
+
+
+def test_lodging_address_is_decoded_end_to_end(refresh_travel_schedule, monkeypatch, capsys):
+    """A hotel address escapes every comma. This is the string the mid-trip
+    drive legs route from, so all of them decode, not just the first."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    _patch_urlopen(
+        monkeypatch,
+        _located(
+            "1854 W El Camino Real\\, Mountain View\\, CA\\, United States",
+            uid="item-900@tripit.com",
+            summary="Check-in: Residence Inn",
+        ),
+    )
+
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    events = json.loads(output_path.read_text())
+    assert events[0]["location"] == "1854 W El Camino Real, Mountain View, CA, United States"
+
+
+def test_location_escaped_backslash_survives_one_pass(refresh_travel_schedule, monkeypatch, capsys):
+    """One pass over the escapes: `\\\\,` is a literal backslash then a comma,
+    not an escaped comma read twice."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    _patch_urlopen(monkeypatch, _located("A\\\\, B"))
+
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    events = json.loads(output_path.read_text())
+    assert events[0]["location"] == "A\\, B"
+
+
+def test_location_newline_and_semicolon_escapes_are_decoded(
+    refresh_travel_schedule, monkeypatch, capsys
+):
+    """A multi-line venue address arrives as real lines, and an escaped
+    semicolon as a semicolon — the rest of the spec's TEXT escape set."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    _patch_urlopen(monkeypatch, _located("Moscone Center\\n747 Howard St\\; Hall A"))
+
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    events = json.loads(output_path.read_text())
+    assert events[0]["location"] == "Moscone Center\n747 Howard St; Hall A"
+
+
+def test_summary_and_description_stay_verbatim(refresh_travel_schedule, monkeypatch, capsys):
+    """Only `location` decodes. `description` is the raw DESCRIPTION every
+    downstream parser (`tripit_local_time`, drive-engine's route reader) reads
+    escapes and all, and `summary` keeps the feed's own text (#278)."""
+    module, url_path, output_path = refresh_travel_schedule
+    url_path.write_text("https://tripit.example.test/feed.ics\n")
+    body = _ics(
+        [
+            ("DTSTART", "20260601"),
+            ("DTEND", "20260605"),
+            ("SUMMARY", "Check-in: Radisson Blu Airport Hotel\\, Oslo"),
+            ("LOCATION", "Hotellvegen\\, 2060 Gardermoen\\, Norway"),
+            ("UID", "item-901@tripit.com"),
+            ("DESCRIPTION", "[Lodging] Arrive Radisson\\nSun\\, Aug 23"),
+        ],
+    )
+    _patch_urlopen(monkeypatch, body)
+
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    events = json.loads(output_path.read_text())
+    assert events[0]["summary"] == "Check-in: Radisson Blu Airport Hotel\\, Oslo"
+    assert events[0]["description"] == "[Lodging] Arrive Radisson\\nSun\\, Aug 23"
+    assert events[0]["location"] == "Hotellvegen, 2060 Gardermoen, Norway"
 
 
 # ---------------------------------------------------------------------------
