@@ -16,7 +16,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "skills" / "drive-engine"))
 
-from home_address import HomeAddressError, read_current_home  # noqa: E402
+from home_address import (  # noqa: E402
+    ACCEPTED_SCHEMA_VERSIONS,
+    HomeAddressError,
+    read_current_home,
+)
 
 CANONICAL_BLOCK = """\
 # Owner Profile
@@ -102,4 +106,34 @@ def test_addresses_block_without_current_home_raises_even_if_prose_has_it(tmp_pa
 def test_empty_current_home_value_raises(tmp_path):
     profile = _write_profile(tmp_path, "## Addresses\n- current_home:   \n")
     with pytest.raises(HomeAddressError, match="no `current_home:` entry"):
+        read_current_home(path=profile)
+
+
+def test_accepted_schema_versions_read_normally(tmp_path):
+    for version in sorted(ACCEPTED_SCHEMA_VERSIONS):
+        profile = _write_profile(
+            tmp_path,
+            f"## Addresses\n- schema_version: {version}\n- current_home: 12 Example St\n",
+        )
+        assert read_current_home(path=profile) == "12 Example St"
+
+
+def test_forward_schema_version_raises_actionable(tmp_path):
+    """A block shape this reader doesn't know is no usable prior state
+    (`coding-policy: stateful-artifacts`). Here that means refusing: the whole
+    contract of this reader is that it never guesses an origin."""
+    profile = _write_profile(
+        tmp_path,
+        "## Addresses\n- schema_version: 99\n- current_home: 12 Example St\n",
+    )
+    with pytest.raises(HomeAddressError, match="schema_version='99'"):
+        read_current_home(path=profile)
+
+
+def test_unparseable_schema_version_raises(tmp_path):
+    profile = _write_profile(
+        tmp_path,
+        "## Addresses\n- schema_version: draft-2\n- current_home: 12 Example St\n",
+    )
+    with pytest.raises(HomeAddressError, match="upgrade"):
         read_current_home(path=profile)

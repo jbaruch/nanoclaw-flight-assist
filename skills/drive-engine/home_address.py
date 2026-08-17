@@ -17,6 +17,7 @@ The block the trusted plugin writes (Epic #59 §4):
 
     ## Addresses
     <!-- canonical, machine-read by travel tile -->
+    - schema_version: 1
     - current_home: 12 Example St, Sampleton, TN 37000
     - home_airport: BNA
     - new_home_wip: 99 Placeholder Rd, Testburg, TN 37100
@@ -24,6 +25,11 @@ The block the trusted plugin writes (Epic #59 §4):
 `current_home` is the drive origin. `new_home_wip` (a house under
 construction) is deliberately NOT read — switching origins is a later,
 explicit change, not an automatic pickup of whichever address appears first.
+
+The block parse and the accepted `schema_version` set live in
+`skills/travel-core/addresses.py`, which every bundle reading this block
+shares; this module owns what an absent or unreadable `current_home` means for
+drive planning.
 
 This is the deterministic reader (per `coding-policy: script-delegation` — a
 fixed parse of a fixed block). It does NOT fall back to a guessed address: a
@@ -41,38 +47,27 @@ Public API:
 
 from __future__ import annotations
 
-import os
-import re
+import sys
 from pathlib import Path
 
-_DEFAULT_PROFILE_PATH = "/workspace/trusted/user_profile.md"
-_PROFILE_PATH_ENV = "USER_PROFILE_PATH"
+_BUNDLE_DIR = Path(__file__).resolve().parent
+_TRAVEL_CORE = Path("/home/node/.claude/skills/tessl__travel-core")
+if not _TRAVEL_CORE.is_dir():
+    _TRAVEL_CORE = _BUNDLE_DIR.parent / "travel-core"
+if str(_TRAVEL_CORE) not in sys.path:
+    sys.path.insert(0, str(_TRAVEL_CORE))
 
-# The `## Addresses` section heading. `current_home` is read ONLY from inside
-# this canonical block — a `current_home:` mention elsewhere in the profile
-# (prose, an example, a stale note) must never set the drive origin.
-_ADDRESSES_HEADING_RE = re.compile(r"^[ \t]*##[ \t]+Addresses[ \t]*$", re.MULTILINE)
-# The next `## ` heading that closes the Addresses section.
-_NEXT_H2_RE = re.compile(r"^[ \t]*##[ \t]+\S", re.MULTILINE)
-# The canonical drive-origin key inside the `## Addresses` block. Matched as a
-# `- current_home: <value>` list item, tolerant of surrounding whitespace.
-_CURRENT_HOME_RE = re.compile(r"^\s*-\s*current_home\s*:\s*(?P<value>\S.*?)\s*$", re.MULTILINE)
+from addresses import (  # noqa: E402
+    ACCEPTED_SCHEMA_VERSIONS,
+    is_supported_version,
+    schema_version,
+    values_in,
+)
+from addresses import profile_path as _addresses_profile_path  # noqa: E402
+from addresses import section as _addresses_section  # noqa: E402
 
-
-def _addresses_section(text: str) -> str | None:
-    """The body of the `## Addresses` block, or None when the heading is absent.
-
-    Runs from just after the `## Addresses` heading to the next `## ` heading
-    (or end of file). Scoping the `current_home` read to this block is what
-    keeps a stale or example `current_home:` elsewhere in the profile from
-    silently becoming the drive origin.
-    """
-    heading = _ADDRESSES_HEADING_RE.search(text)
-    if heading is None:
-        return None
-    body = text[heading.end() :]
-    nxt = _NEXT_H2_RE.search(body)
-    return body[: nxt.start()] if nxt else body
+# The canonical drive-origin key inside the `## Addresses` block.
+_CURRENT_HOME_KEY = "current_home"
 
 
 class HomeAddressError(Exception):
@@ -86,7 +81,7 @@ class HomeAddressError(Exception):
 
 def profile_path() -> Path:
     """The owner-profile path; overridable via `USER_PROFILE_PATH` for tests."""
-    return Path(os.environ.get(_PROFILE_PATH_ENV, _DEFAULT_PROFILE_PATH))
+    return _addresses_profile_path()
 
 
 def read_current_home(*, path: Path | None = None) -> str:
@@ -100,10 +95,12 @@ def read_current_home(*, path: Path | None = None) -> str:
 
     Raises:
         HomeAddressError: when the profile file is missing, carries no
-            `## Addresses` block, or that block carries no non-empty
-            `current_home:` entry — each with a message pointing at the
-            `nanoclaw-trusted` trusted-memory Addresses block to fix. A
-            `current_home:` outside the block is deliberately not read.
+            `## Addresses` block, carries a block stamped with a
+            `schema_version` this reader does not accept, or carries no
+            non-empty `current_home:` entry — each with a message pointing at
+            the fix, the `nanoclaw-trusted` trusted-memory Addresses block or a
+            plugin upgrade. A `current_home:` outside the block is deliberately
+            not read.
     """
     target = path if path is not None else profile_path()
     try:
@@ -124,10 +121,25 @@ def read_current_home(*, path: Path | None = None) -> str:
             "block of user_profile.md (nanoclaw-trusted trusted-memory); add it with a "
             "`- current_home: <address>` line and redeploy"
         )
-    match = _CURRENT_HOME_RE.search(section)
-    if match is None:
+    # Schema gate per `coding-policy: stateful-artifacts`: a non-owner reader
+    # accepts the versions it knows and treats any other as no usable prior
+    # state. Here that means refusing rather than degrading — this reader's
+    # whole contract is that it never guesses an origin, and a block shape it
+    # cannot read is not a licence to start.
+    declared = schema_version(section)
+    if not is_supported_version(declared):
+        raise HomeAddressError(
+            f"the `## Addresses` block in {target} is stamped schema_version={declared!r}, "
+            f"outside this reader's accepted {sorted(ACCEPTED_SCHEMA_VERSIONS)} — upgrade the "
+            "jbaruch/nanoclaw-travel plugin so it reads the current block shape"
+        )
+    values = values_in(section, _CURRENT_HOME_KEY)
+    if not values:
         raise HomeAddressError(
             f"no `current_home:` entry in the `## Addresses` block of {target} — add "
             "`- current_home: <address>` to the canonical block (nanoclaw-trusted trusted-memory)"
         )
-    return match["value"].strip()
+    # One residence, one origin: a block carrying two `current_home:` lines is
+    # malformed on the owner's side, and the first is the one the owner's own
+    # rewrite keeps.
+    return values[0]

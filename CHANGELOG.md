@@ -1,5 +1,25 @@
 # Changelog
 
+### Fixed — the brief nagging about a surgery
+
+`Alice's surgery`, September 16–17, Nashville. The travel-bookings brief listed it under "ничего не забукано" — nothing booked. Correct, in the sense that nothing was booked. Also useless: it is a placeholder trip filed in TripIt so byAir, drive-engine, and cfp-conflict-check all see the day is taken. There is no flight to book to the city you live in.
+
+The check had no way to tell. `classify_trip` saw `"days": {}`, called it `is_empty`, and fired — which is exactly right for a Devoxx trip three weeks out with nothing on it. The empty itinerary is the same signal in both cases; the destination is what separates them, and the destination was nowhere in `travel-db.json`.
+
+The issue (#271) assumed the destination would have to come from the tripit-api service, since nothing local carried it. It turned out `travel-schedule.json` has had it the whole time — `refresh-travel-schedule.py` reads the trip wrapper's `LOCATION` off the iCal feed and writes it out as `Nashville\, TN`. `build-travel-db.py` was dropping it on the floor. So the fix is a field the builder already had in hand: `travel-db.json` v3 carries an optional `destination` per trip, ICS escapes unwound, written only when the feed labels the trip.
+
+`check-travel-bookings.py` then skips a trip whose destination is the operator's home metro, in the same breath as the existing skip-past-trips guard, and counts it under a new `local_trips` in the output rather than folding it into `complete_trips` — nothing about it was checked, and an operator asking "why didn't it flag that one?" deserves the answer somewhere.
+
+The home metro is config, not a string constant: `- home_metro: Nashville, TN` in the trusted profile's canonical `## Addresses` block, next to the `home_airport` that has lived there since Epic #59. An unset key means every trip gets checked, which is the behaviour that predates this change — so the reader is dual-accept from birth and the writer-side schema bump in `nanoclaw-trusted` can land after this ships, per `stateful-artifacts` Cross-Pipeline Schema Bumps. Matching is exact equality on the normalized label (casefolded, whitespace collapsed), never a substring test: `East Nashville, TN 37206` is not home, and neither is a blank destination. An unlabelled trip is a trip whose destination we do not know, and reading unknown as home would silence the check for precisely the trips it exists to watch.
+
+That block's parse now lives in `skills/travel-core/addresses.py`, shared with `skills/drive-engine/home_address.py` rather than copied beside it. The two consumers disagree about what absence means, which is the interesting half: a missing `current_home` still raises, because a guessed drive origin mis-times every leg, while a missing `home_metro` just means suppress nothing. Both now gate on the block's own `schema_version` — the first draft did not, on the theory that reading keys by name is inherently version-agnostic, which is a nice theory and not what `stateful-artifacts` says. A block stamped past what the reader knows is no usable prior state: the booking check reads no home metro and checks every trip, the drive reader refuses outright.
+
+The v3 bump rides through the lock-step readers — `check-travel-bookings.py` and `flight-assist/trip_window.py` accept `{1, 2, 3}`, and `nightly-travel-sync/precheck.py` expects 3 so the next nightly fire rebuilds rather than waiting for the DB to age out (the #268 lesson, applied on purpose this time).
+
+### Changed — one directive per bullet in the travel-history section
+
+The advisory findings from the policy review of #272, folded into a round that was already happening (#273). Three bullets in `flight-data-locality`'s `Travel Already Booked or Flown` section carried more than one directive each: how `using-tripit` reaches the service was bundled with the overlay-tile loading and the never-vendor rule; the iCal feed's ~90-day limitation was bundled with its input contract for two artifacts. Both split, meaning unchanged. The third dropped "is the failure this section names" — incident framing belongs in the entry above, not in a rule that loads on every turn — and keeps the routing directive.
+
 ## 0.2.115 — 2026-08-16
 
 ### Added — the account this plugin has been reading through a keyhole

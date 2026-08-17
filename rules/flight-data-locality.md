@@ -19,9 +19,12 @@ alwaysApply: true
 ## Travel Already Booked or Flown
 
 - `jbaruch/tripit-api` is the source-of-record for travel history: past trips, lodging stays, confirmation numbers, costs, loyalty balances
-- Its `using-tripit` skill reaches the service over `TRIPIT_API_URL` / `TRIPIT_API_TOKEN`. The plugin loads as a co-loaded overlay tile, never vendored here
-- The TripIt iCal feed carries a rolling ~90-day window and no confirmation numbers. It stays the input to `travel-schedule.json` and `travel-db.json` for upcoming travel
-- A history question answered by hand-parsing an `.ics` is the failure this section names. Route it to `using-tripit`
+- Its `using-tripit` skill reaches the service over `TRIPIT_API_URL` / `TRIPIT_API_TOKEN`
+- The plugin loads as a co-loaded overlay tile
+- The plugin is never vendored here
+- The TripIt iCal feed carries a rolling ~90-day window and no confirmation numbers
+- The feed stays the input to `travel-schedule.json` and `travel-db.json` for upcoming travel
+- Route a history question to `using-tripit`, never to a hand-parsed `.ics`
 - A second history source is forbidden on the same terms as a second flight-data API
 
 ## How to Apply

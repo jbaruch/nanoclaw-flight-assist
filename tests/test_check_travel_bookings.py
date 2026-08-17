@@ -1188,7 +1188,7 @@ def test_load_trips_from_db_returns_none_on_forward_schema_version(check_travel_
     instead of attempting to parse an unknown shape."""
     module, db_path, _ = check_travel_bookings
     payload = _db_payload({})
-    payload["schema_version"] = 3
+    payload["schema_version"] = 99
     db_path.write_text(json.dumps(payload))
     assert module.load_trips_from_db(str(db_path)) is None
 
@@ -1290,7 +1290,7 @@ def test_main_snooze_with_forward_schema_ignored(check_travel_bookings, monkeypa
         json.dumps(
             {
                 "madrid-2026-06": {
-                    "schema_version": 3,
+                    "schema_version": 99,
                     "snooze_until": (_FROZEN_TODAY + timedelta(days=2)).isoformat(),
                 }
             }
@@ -1763,3 +1763,153 @@ def test_v2_db_is_accepted(check_travel_bookings, monkeypatch, capsys):
     payload["schema_version"] = 2
     db_path.write_text(json.dumps(payload))
     assert module.load_trips_from_db(str(db_path)) == []
+
+
+def test_v3_db_is_accepted(check_travel_bookings):
+    """The version the current writer stamps reads normally."""
+    module, db_path, _ = check_travel_bookings
+    payload = _db_payload({})
+    payload["schema_version"] = 3
+    db_path.write_text(json.dumps(payload))
+    assert module.load_trips_from_db(str(db_path)) == []
+
+
+# ---------------------------------------------------------------------------
+# Home-metro placeholder suppression (#271)
+# ---------------------------------------------------------------------------
+
+
+def _write_home_metro(tmp_path, *metros):
+    """Write the trusted profile's canonical `## Addresses` block carrying the
+    given home-metro labels. The fixture already points USER_PROFILE_PATH here."""
+    lines = "".join(f"- home_metro: {metro}\n" for metro in metros)
+    (tmp_path / "user_profile.md").write_text(
+        f"# Owner Profile\n\n## Addresses\n- home_airport: BNA\n{lines}",
+        encoding="utf-8",
+    )
+
+
+def _empty_trip_payload(*, summary, destination=None):
+    """A trip with an empty itinerary — the shape a TripIt placeholder takes.
+    `classify_trip` reads it as `is_empty`, which fires the "nothing booked"
+    gap unless the destination says the trip is local."""
+    trip = _trip_record(
+        summary=summary,
+        start=_FROZEN_TODAY + timedelta(days=10),
+        end=_FROZEN_TODAY + timedelta(days=11),
+        days={},
+    )
+    if destination is not None:
+        trip["destination"] = destination
+    return _db_payload({"placeholder-2026-05": trip})
+
+
+def test_home_metro_placeholder_raises_no_gap(check_travel_bookings, tmp_path, monkeypatch, capsys):
+    """A local placeholder — a TripIt trip filed to block time for a Nashville
+    event — has nothing to book. Its empty itinerary is the finished state."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN")
+    db_path.write_text(
+        json.dumps(_empty_trip_payload(summary="Alice's surgery", destination="Nashville, TN"))
+    )
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert output["gaps"] == []
+    assert output["local_trips"] == 1
+    # Counted apart from `complete_trips`: nothing about it was checked.
+    assert output["complete_trips"] == 0
+
+
+def test_away_trip_with_nothing_booked_still_fires(
+    check_travel_bookings, tmp_path, monkeypatch, capsys
+):
+    """The regression guard on the fix: an away trip with an empty itinerary is
+    exactly what this check exists to catch, and looks identical to a local
+    placeholder apart from its destination."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN")
+    db_path.write_text(json.dumps(_empty_trip_payload(summary="Oslo", destination="Oslo, Norway")))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert [gap["issue"] for gap in output["gaps"]] == ["ничего не забукано"]
+    assert output["local_trips"] == 0
+
+
+def test_unlabelled_trip_still_fires(check_travel_bookings, tmp_path, monkeypatch, capsys):
+    """A trip the feed never labelled has an unknown destination, and unknown is
+    never home — a pre-v3 DB must keep nagging, not go quiet."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN")
+    db_path.write_text(json.dumps(_empty_trip_payload(summary="Somewhere")))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    assert [gap["issue"] for gap in json.loads(out)["gaps"]] == ["ничего не забукано"]
+
+
+def test_no_home_metro_configured_checks_every_trip(check_travel_bookings, monkeypatch, capsys):
+    """Absent `home_metro` in the profile is the pre-#271 behaviour: the local
+    trip is nagged about, same as before the key existed."""
+    module, db_path, _ = check_travel_bookings
+    db_path.write_text(
+        json.dumps(_empty_trip_payload(summary="Alice's surgery", destination="Nashville, TN"))
+    )
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert [gap["issue"] for gap in output["gaps"]] == ["ничего не забукано"]
+    assert output["local_trips"] == 0
+
+
+def test_home_metro_suppresses_a_partially_booked_local_trip(
+    check_travel_bookings, tmp_path, monkeypatch, capsys
+):
+    """Suppression is keyed on the destination alone, not on the itinerary being
+    empty: a local trip that happens to carry a dinner reservation still needs
+    no flight and no hotel."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN")
+    trip_start = _FROZEN_TODAY + timedelta(days=10)
+    payload = _db_payload(
+        {
+            "titans-2026-05": {
+                **_trip_record(
+                    summary="Jets at Titans",
+                    start=trip_start,
+                    end=trip_start + timedelta(days=2),
+                    days={
+                        trip_start.isoformat(): [
+                            _item(type="Flight", summary="Outbound", start=trip_start),
+                        ],
+                    },
+                ),
+                "destination": "Nashville, TN",
+            }
+        }
+    )
+    db_path.write_text(json.dumps(payload))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert output["gaps"] == []
+    assert output["local_trips"] == 1
+
+
+def test_several_home_metro_labels_all_match(check_travel_bookings, tmp_path, monkeypatch, capsys):
+    """The metro spans more than one label the feed might use; repeated
+    `home_metro:` lines all count."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN", "Franklin, TN")
+    db_path.write_text(
+        json.dumps(_empty_trip_payload(summary="Local thing", destination="Franklin, TN"))
+    )
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    assert json.loads(out)["gaps"] == []

@@ -68,13 +68,14 @@ _TRIP_WINDOW_TRAIL = timedelta(hours=24)
 # schema_version is legacy-implicit v1 (the owner's migration policy) and read
 # normally.
 #
-# Both accepted versions parse identically here: v2 only ADDS optional
-# `start_local`/`end_local` to day items, and this gate reads trip-level
-# `start`/`end` alone. Dual-accept per `coding-policy: stateful-artifacts`
-# keeps the rollout zero-skew — the on-disk DB stays v1 until the next
-# nightly rebuild, so a v2-only reader would fail open on every cycle in
+# Every accepted version parses identically here: v2 only ADDS optional
+# `start_local`/`end_local` to day items, v3 an optional trip-level
+# `destination`, and this gate reads trip-level `start`/`end` alone.
+# Dual-accept per `coding-policy: stateful-artifacts` keeps each rollout
+# zero-skew — the on-disk DB stays at the old version until the next nightly
+# rebuild, so a current-version-only reader would fail open on every cycle in
 # between.
-_ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS = frozenset({1, 2})
+_ACCEPTED_TRAVEL_DB_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 
 
 @dataclass(frozen=True)

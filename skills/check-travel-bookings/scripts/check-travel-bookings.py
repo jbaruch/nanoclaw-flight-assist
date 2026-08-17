@@ -13,6 +13,9 @@ DB issues. A silent live-ICS fallback here would only mask that signal.
 `travel-schedule.json`, not the DB.)
 
 Alerts on transport (Flight or Rail) + Lodging gaps; all item types are in the DB for future use.
+
+Trips to the operator's own metro are skipped outright — see the home-metro
+guard in `main()`.
 """
 
 import json
@@ -31,6 +34,7 @@ if not _TRAVEL_CORE.is_dir():
 if str(_TRAVEL_CORE) not in sys.path:
     sys.path.insert(0, str(_TRAVEL_CORE))
 
+from addresses import home_metro_names, is_home_metro  # noqa: E402
 from lodging import CHECK_IN, CHECK_OUT, hotel_name, lodging_role  # noqa: E402
 
 DB_PATH = "/workspace/group/travel-db.json"
@@ -71,15 +75,17 @@ TRANSPORT_GAP_ASK_ISSUE = "отель есть, рейса нет — едешь
 # Legacy data lacking schema_version is treated as implicit v1 (the
 # field was introduced at v1; no prior version exists). Higher
 # versions are forward-incompatible — return None / skip the entry.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
-# v2 only ADDS optional `start_local`/`end_local` to day items, so a v1 DB
-# reads with the local fields simply absent. Accepting both keeps the rollout
-# zero-skew per `coding-policy: stateful-artifacts`: the on-disk DB stays v1
-# until the next nightly rebuild, and a v2-only reader would hard-error the
-# whole brief in between. The same set gates the snooze store, whose entries
-# carry their own stamp and whose shape did not change at v2.
-_ACCEPTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
+# Every bump so far has been additive — v2 adds optional `start_local`/
+# `end_local` to day items, v3 an optional trip-level `destination` — so an
+# older DB reads with the newer fields simply absent. Accepting the whole set
+# keeps each rollout zero-skew per `coding-policy: stateful-artifacts`: the
+# on-disk DB stays at the old version until the next nightly rebuild, and a
+# current-version-only reader would hard-error the whole brief in between. The
+# same set gates the snooze store, whose entries carry their own stamp and
+# whose shape has not changed.
+_ACCEPTED_SCHEMA_VERSIONS = frozenset({1, 2, SCHEMA_VERSION})
 
 
 def _schema_compatible(value) -> bool:
@@ -295,7 +301,8 @@ def _item_day(event: dict, field: str) -> date:
 def load_trips_from_db(db_path: str) -> list[dict] | None:
     """
     Load trips from travel-db.json.
-    Returns list of dicts with keys: summary, start (date), end (date), items.
+    Returns list of dicts with keys: summary, start (date), end (date),
+    destination (str, "" when the DB carries none), items.
     items is a list of dicts with: item_type, summary, dtstart (date), dtend (date).
     Returns None if the DB file is missing, unreadable, or structurally
     invalid — main() treats that as a hard error rather than falling
@@ -393,11 +400,16 @@ def load_trips_from_db(db_path: str) -> list[dict] | None:
             )
             continue
 
+        # v3, optional: absent on a pre-v3 DB and on a trip the feed left
+        # unlabelled. Normalized to "" so the caller's home-metro test reads
+        # one shape, and an unknown destination is never home.
+        destination = t.get("destination")
         trips.append(
             {
                 "summary": summary,
                 "start": trip_start,
                 "end": trip_end,
+                "destination": destination if isinstance(destination, str) else "",
                 "items": items,
                 "slug": slug,
             }
@@ -475,8 +487,14 @@ def main():
     # `load_transport_gap_verdicts`.
     transport_verdicts = load_transport_gap_verdicts()
 
+    # The operator's home metro, read from the trusted profile's canonical
+    # `## Addresses` block (see `skills/travel-core/addresses.py`). Empty when the key
+    # is unset, which is the pre-#271 behaviour: every trip gets checked.
+    home_metro = home_metro_names()
+
     gaps = []
     complete_trips = 0
+    local_trips = 0
 
     for trip in trips:
         trip_start = trip["start"]
@@ -487,6 +505,18 @@ def main():
 
         # Skip past trips
         if trip_end < today:
+            continue
+
+        # Skip trips to the operator's own metro. These are placeholders filed
+        # to block time for a local event — a home game, a family surgery — so
+        # byAir, drive-engine, and cfp-conflict-check see the day is taken.
+        # There is no flight and no hotel to book at home, so an empty
+        # itinerary here is the finished state, not a gap (#271). The empty
+        # itinerary alone can NOT decide this: an away trip with nothing booked
+        # yet looks identical and is exactly what this check exists to catch.
+        # The destination is the separator, which is why it rides in the DB.
+        if is_home_metro(trip["destination"], home_metro):
+            local_trips += 1
             continue
 
         classification = classify_trip(items, trip_start, trip_end, today)
@@ -603,6 +633,10 @@ def main():
         "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "total_trips": len(trips),
         "complete_trips": complete_trips,
+        # Home-metro placeholders, counted rather than folded into
+        # `complete_trips`: nothing about them was checked, and an operator
+        # asking "why didn't it flag that one?" reads the answer here.
+        "local_trips": local_trips,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
