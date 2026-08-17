@@ -267,3 +267,26 @@ def test_is_supported_version_contract():
 def test_schema_version_returns_the_declared_value_verbatim():
     assert schema_version("\n- schema_version:  2 \n") == "2"
     assert schema_version("\n- current_home: 12 Example St\n") is None
+
+
+def test_blank_value_does_not_swallow_the_next_line(tmp_path):
+    """`\\s*` after the colon crosses the newline, so a blank entry matched the
+    NEXT line — `- current_home:` blank read `- home_airport: BNA` as the
+    residence every drive routes from."""
+    profile = _write_profile(
+        tmp_path,
+        "## Addresses\n- home_metro:   \n- home_airport: BNA\n",
+    )
+    assert read_values("home_metro", path=profile) == ()
+
+
+def test_a_key_is_matched_on_its_own_line_only(tmp_path):
+    # The value never spans lines: whatever follows on the NEXT line belongs to
+    # whatever key that line names.
+    profile = _write_profile(
+        tmp_path,
+        "## Addresses\n- current_home:\n- home_airport: BNA\n- home_metro: Nashville, TN\n",
+    )
+    assert read_values("current_home", path=profile) == ()
+    assert read_values("home_airport", path=profile) == ("BNA",)
+    assert read_values("home_metro", path=profile) == ("Nashville, TN",)

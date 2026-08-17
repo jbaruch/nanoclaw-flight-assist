@@ -17,33 +17,28 @@ The block the trusted plugin writes:
     - new_home_wip: 99 Placeholder Rd, Testburg, TN 37100
 
 This module owns the parse alone; each consumer owns what a missing value
-means. `skills/drive-engine/home_address.py` raises on an absent `current_home`
-(a guessed drive origin mis-times every leg), while `home_metro_names` yields an
-empty frozenset (an absent home metro means "suppress nothing", which is the
+means. `drive-engine/home_address.py` raises on an absent `current_home` (a
+guessed drive origin mis-times every leg), while `home_metro_names` returns an
+empty tuple (an absent home metro means "suppress nothing", which is the
 behaviour that predates the key).
 
-Reads are gated on the block's own `schema_version` per
-`coding-policy: stateful-artifacts`: a non-owner reader accepts the versions it
-knows and treats anything else as no usable prior state. `ACCEPTED_SCHEMA_VERSIONS`
-carries the rollout pair — writer and readers ship through separate pipelines,
-so both versions are live at once for the rollout window and dual-accept is what
-keeps that window zero-skew. A block with no `schema_version` line is legacy
-pre-versioned data, read as v1.
+The block's own `schema_version` is deliberately NOT gated on. Keys are read by
+name, an unknown key is ignored, and an absent key reads as absent — so a
+reader stays dual-accept across the trusted plugin's bumps, which is what
+`coding-policy: stateful-artifacts` (Cross-Pipeline Schema Bumps) requires of
+a reader shipping through a separate pipeline from its writer.
 
 stdlib-only per `coding-policy: dependency-management` (Stdlib First).
 
 Public API:
     from addresses import (
-        home_metro_names, is_home_metro, is_supported_version, profile_path,
-        read_values, schema_version, section,
+        home_metro_names, is_home_metro, profile_path, read_values, section,
     )
 
     section(text)                     # the `## Addresses` body, or None
-    schema_version(block)             # the declared version verbatim, or None
-    is_supported_version(declared)    # whether this reader may read the block
     read_values("home_metro")         # ("Nashville, TN",) — tolerant, never raises
-    home_metro_names()                # frozenset of normalized home-metro labels
-    is_home_metro("Nashville, TN", names)     # True
+    home_metro_names()                # normalized home-metro labels
+    is_home_metro("Nashville\\, TN", names)   # True
 """
 
 from __future__ import annotations
@@ -55,14 +50,6 @@ from pathlib import Path
 
 DEFAULT_PROFILE_PATH = "/workspace/trusted/user_profile.md"
 PROFILE_PATH_ENV = "USER_PROFILE_PATH"
-
-# The block key carrying its own shape version, and the versions this reader
-# accepts. v1 is the Epic #59 shape (`current_home`, `home_airport`,
-# `new_home_wip`); v2 adds `home_metro`. Both are accepted because the owner
-# (`nanoclaw-trusted`) and this reader ship through separate pipelines, so
-# production runs the pair for the rollout window.
-SCHEMA_VERSION_KEY = "schema_version"
-ACCEPTED_SCHEMA_VERSIONS = frozenset({1, 2})
 
 # The `## Addresses` section heading. Values are read ONLY from inside this
 # canonical block — a `current_home:` or `home_metro:` mention elsewhere in the
@@ -112,60 +99,21 @@ def values_in(block: str, key: str) -> tuple[str, ...]:
     Blank values are dropped — a `- home_metro:` line with nothing after it is
     an unset key, not an empty-string match that would suppress every trip
     whose destination the feed left blank.
-
-    Every gap here is horizontal whitespace, never a whitespace class that
-    includes the newline: crossing it made a blank `- current_home:` match the
-    NEXT line and read `- home_airport: BNA` as the residence to route drives
-    from.
     """
     pattern = re.compile(
-        rf"^[ \t]*-[ \t]*{re.escape(key)}[ \t]*:[ \t]*(?P<value>\S.*?)[ \t]*$",
+        rf"^\s*-\s*{re.escape(key)}\s*:\s*(?P<value>\S.*?)\s*$",
         re.MULTILINE,
     )
     return tuple(match["value"].strip() for match in pattern.finditer(block))
-
-
-def schema_version(block: str) -> str | None:
-    """The block's declared `schema_version`, verbatim, or None when absent.
-
-    Returned unparsed so a caller's diagnostic can quote what the block
-    actually said, malformed stamps included.
-    """
-    values = values_in(block, SCHEMA_VERSION_KEY)
-    return values[0] if values else None
-
-
-def is_supported_version(declared: str | None) -> bool:
-    """Whether a block stamped `declared` may be read by this reader.
-
-    An absent stamp is legacy pre-versioned data, read as v1 — the field was
-    introduced at v1, so no earlier shape exists. A stamp outside
-    `ACCEPTED_SCHEMA_VERSIONS`, or one that is not an integer at all, is a
-    shape this reader does not know: per `coding-policy: stateful-artifacts` it
-    is the reader that is lagging, so the answer is no usable prior state and
-    an updated reader, never a guess at the new shape.
-    """
-    if declared is None:
-        return True
-    try:
-        return int(declared) in ACCEPTED_SCHEMA_VERSIONS
-    except ValueError:
-        return False
 
 
 def read_values(key: str, *, path: Path | None = None) -> tuple[str, ...]:
     """Every value for `key` in the profile's Addresses block. Never raises.
 
     Returns an empty tuple when the profile is absent, unreadable, carries no
-    `## Addresses` block, carries a `schema_version` this reader does not
-    accept, or carries no such key. Callers that must not guess (drive-engine's
-    drive origin) read the block themselves and raise; callers whose absent
-    value means "feature off" use this.
-
-    The unsupported-version path lands on the same empty tuple as an unset key,
-    which is the safe direction `coding-policy: stateful-artifacts` requires of
-    a no-prior-state fallback: reading no home metro checks every trip, where
-    guessing at an unknown block shape could silence the check.
+    `## Addresses` block, or carries no such key. Callers that must not guess
+    (drive-engine's drive origin) read the block themselves and raise; callers
+    whose absent value means "feature off" use this.
 
     A profile that is simply not mounted reads as absent and stays silent — not
     every tier mounts `/workspace/trusted`. A profile that IS there but cannot
@@ -187,16 +135,6 @@ def read_values(key: str, *, path: Path | None = None) -> tuple[str, ...]:
         return ()
     block = section(text)
     if block is None:
-        return ()
-    declared = schema_version(block)
-    if not is_supported_version(declared):
-        print(
-            f"addresses: `## Addresses` block in {target} is stamped "
-            f"schema_version={declared!r}, outside this reader's accepted "
-            f"{sorted(ACCEPTED_SCHEMA_VERSIONS)} — reading `{key}` as unset; "
-            "upgrade the jbaruch/nanoclaw-travel plugin",
-            file=sys.stderr,
-        )
         return ()
     return values_in(block, key)
 

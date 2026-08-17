@@ -1,5 +1,15 @@
 # Changelog
 
+### Fixed — a blank address line read the next line as its value
+
+`- current_home:` with nothing after it did not read as empty. It read as `- home_airport: BNA`.
+
+The key-matching regex used `\s*` around the colon, and `\s` includes the newline. With no value on its own line, the match walked to the next line and took whatever was there — so the address every home-anchored drive routes from could have been an IATA code, silently, and `home_address.py` would have returned it rather than raising the "no `current_home:` entry" error that exists precisely for this.
+
+The bug is older than the shared module: the same pattern shipped in `home_address.py` since the Epic #59 block landed, and 0.2.116 inherited it into `travel-core/addresses.py` where `home_metro` picked it up too. It only bites when a key is blank AND another line follows, which is why a suite that tested a blank key at end-of-block went green on it.
+
+Every gap in the pattern is now horizontal whitespace. Regressions pin both sides: a blank `home_metro` reads as unset, and a blank `current_home` raises.
+
 ### Fixed — the brief nagging about a surgery
 
 `Alice's surgery`, September 16–17, Nashville. The travel-bookings brief listed it under "ничего не забукано" — nothing booked. Correct, in the sense that nothing was booked. Also useless: it is a placeholder trip filed in TripIt so byAir, drive-engine, and cfp-conflict-check all see the day is taken. There is no flight to book to the city you live in.
