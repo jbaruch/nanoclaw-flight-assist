@@ -56,6 +56,15 @@ Gmail is not this plugin's domain, so it depends on the one tested copy of the R
 
 Travel history is the same story. **`jbaruch/tripit-api`** ships the `using-tripit` skill over a read-only TripIt REST + MCP service — every trip past and upcoming, every reservation with confirmation numbers and costs. Carry it in `additionalTiles` alongside this plugin for history, PNR, and cost lookups; the `flight-data-locality` rule names it the source-of-record for travel already booked or flown. It is a separately released plugin with its own tests, not a copy living here, and the iCal feed this plugin syncs stays what it always was: the upcoming window that feeds `travel-schedule.json`. Reaching the service needs `TRIPIT_API_URL` and `TRIPIT_API_TOKEN` on the spawn (nanoclaw#921); this plugin itself calls neither.
 
+## Dev toolchain (`tessl.json`)
+
+`tessl.json` is the maintainer-side manifest — what `tessl install` reads in a clone of this repo. It ships nothing to a consumer: `.tesslignore` keeps it out of the published plugin, and `.tessl/` (the resolved cache it fills) stays gitignored.
+
+| Dependency | Specifier | Renewal |
+|------------|-----------|---------|
+| `jbaruch/coding-policy` | `latest` | Floats by design — the Runtime-Managed Manifest carve-out in `coding-policy: dependency-management`. The plugin's `SessionStart` hook flags any `jbaruch/*` dep that is not `latest`. |
+| `finsi/codex-review` | pinned | Reviewed **quarterly**: run `tessl outdated`, bump in its own PR. No scanner covers this manifest — Renovate has no Tessl datasource, so there is nothing to automate against (see [renovate.json](renovate.json) for what it does cover). |
+
 ## Rules
 
 | Rule | Summary |
