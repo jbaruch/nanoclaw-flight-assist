@@ -1,5 +1,9 @@
 # Changelog
 
+### Chore — the manifest declares `"mode": "managed"`
+
+#280 committed `tessl.json` and corrected the ignore rules around it, leaving the manifest's own contents as the untracked copy had them: `"mode": "vendored"`. `jbaruch/nanoclaw-host: tessl-version-floating` requires `"mode": "managed"` on every NanoClaw manifest. Specifiers were already correct — `jbaruch/coding-policy` floats at `latest`, `finsi/codex-review` pins with the quarterly cadence README records. The `.tesslignore` pattern is anchored to the repo root so it cannot match a nested file of the same name.
+
 ## 0.2.119 — 2026-08-17
 
 ### Fixed — every drive anchor was geocoding a backslash
