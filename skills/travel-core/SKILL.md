@@ -17,6 +17,7 @@ It ships the travel-domain Python modules that more than one skill depends on, s
 - `airport_lead.py` — the airport clearance / post-arrival buffer policy. Public surface: `resolve_departure_clearance_minutes`, `resolve_post_arrival_minutes`, `departure_class`, `arrival_class`. The classification rules and buffer values live in `airport_lead.py` and its tests. Consumed by flight-assist (`airport_drive_inputs`) and the drive engine.
 - `trip_key.py` — the canonical per-trip identifier. Public surface: `trip_key(summary, start)`. Joins `travel-db.json`'s trip slugs to the drive engine's per-trip drive-or-fly verdicts; a second implementation would decide whether a cross-skill read hits or silently misses. Consumed by check-travel-bookings (`build-travel-db`) and the drive engine (`lodging_source`).
 - `lodging.py` — the `Check-in:` / `Check-out:` discriminator for the two `Lodging` records TripIt writes per stay. Public surface: `lodging_role`, `hotel_name`, `CHECK_IN`, `CHECK_OUT`. Consumed by nightly-travel-sync (`refresh-travel-schedule`), check-travel-bookings, and the drive engine.
+- `addresses.py` — the read-only parse of the trusted profile's canonical `## Addresses` block (owned by `nanoclaw-trusted`'s `trusted-memory`). Public surface: `section`, `values_in`, `read_values`, `profile_path`, `home_metro_names`, `is_home_metro`, `normalize_location`. What an absent value means is the consumer's call — `drive-engine/home_address.py` raises on a missing `current_home`, check-travel-bookings reads a missing `home_metro` as "suppress nothing". Consumed by the drive engine (`home_address`) and check-travel-bookings.
 
 ## Consumer contract
 
@@ -38,6 +39,6 @@ from airport_lead import resolve_departure_clearance_minutes  # noqa: E402
 ```
 
 - These modules are pure library code (no I/O beyond `trip_origin`'s schedule-file read). Their behavior and tests are the source of truth; do not restate their thresholds or ladders in consumer skills — reference the module.
-- Tests live in `tests/test_trip_origin.py`, `tests/test_airport_lead.py`, `tests/test_trip_key.py`, and `tests/test_lodging.py`.
+- Tests live in `tests/test_trip_origin.py`, `tests/test_airport_lead.py`, `tests/test_trip_key.py`, `tests/test_lodging.py`, and `tests/test_addresses.py`.
 
 A script one directory deeper (`skills/<name>/scripts/*.py`) walks up one more level for the dev-clone fallback: `Path(__file__).resolve().parent.parent` as `_BUNDLE_DIR`.
