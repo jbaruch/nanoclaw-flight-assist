@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.116 — 2026-08-17
+
 ### Fixed — the brief nagging about a surgery
 
 `Alice's surgery`, September 16–17, Nashville. The travel-bookings brief listed it under "ничего не забукано" — nothing booked. Correct, in the sense that nothing was booked. Also useless: it is a placeholder trip filed in TripIt so byAir, drive-engine, and cfp-conflict-check all see the day is taken. There is no flight to book to the city you live in.
