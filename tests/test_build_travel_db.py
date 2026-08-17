@@ -374,15 +374,15 @@ def test_blank_local_stamp_is_not_carried(build_travel_db, monkeypatch, capsys):
 # --- v3: trip destination (#271) -------------------------------------------
 
 
-def test_destination_is_persisted_with_ics_escapes_unwound(build_travel_db, monkeypatch, capsys):
-    """The feed writes a trip's primary location as ICS TEXT (`Nashville\\, TN`).
-    The DB carries the readable form — it is what the booking check compares
-    against the operator's configured home metro."""
+def test_destination_is_persisted_from_the_schedule(build_travel_db, monkeypatch, capsys):
+    """The schedule hands over a decoded location since its v4 (#275). The DB
+    carries that readable form — it is what the booking check compares against
+    the operator's configured home metro."""
     module, schedule_path, db_path = build_travel_db
     schedule = [
         {
             **_trip("trip", "Jets at Titans", "2026-05-01", "2026-05-02"),
-            "location": "Nashville\\, TN",
+            "location": "Nashville, TN",
         },
     ]
     schedule_path.write_text(json.dumps(schedule))
@@ -408,12 +408,12 @@ def test_destination_omitted_when_the_feed_leaves_it_blank(build_travel_db, monk
         assert "destination" not in trip
 
 
-def test_destination_survives_an_escaped_backslash(build_travel_db, monkeypatch, capsys):
-    """One pass over the escapes: `\\\\,` is a literal backslash then a comma,
-    not an escaped comma read twice."""
+def test_destination_is_not_decoded_a_second_time(build_travel_db, monkeypatch, capsys):
+    """Decoding is the schedule writer's job (#275). A second pass here would
+    eat the backslash out of an address that legitimately carries one."""
     module, schedule_path, db_path = build_travel_db
     schedule = [
-        {**_trip("trip", "Odd", "2026-05-01", "2026-05-02"), "location": "A\\\\, B"},
+        {**_trip("trip", "Odd", "2026-05-01", "2026-05-02"), "location": "A\\, B"},
     ]
     schedule_path.write_text(json.dumps(schedule))
     code, _, _ = _run(module, monkeypatch, capsys)
@@ -429,7 +429,7 @@ def test_run_summary_reports_destination(build_travel_db, monkeypatch, capsys):
     schedule = [
         {
             **_trip("trip", "Jets at Titans", "2026-05-01", "2026-05-02"),
-            "location": "Nashville\\, TN",
+            "location": "Nashville, TN",
         },
     ]
     schedule_path.write_text(json.dumps(schedule))

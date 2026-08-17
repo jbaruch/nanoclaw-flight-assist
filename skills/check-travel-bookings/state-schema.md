@@ -34,7 +34,7 @@ Compact day-indexed projection of upcoming trips.
 
 Each `<item>` carries `type`, `summary`, `start`, `end`, `uid`, and — for a timed record whose local clock resolved — the optional `start_local` / `end_local` stamps (`YYYY-MM-DDTHH:MM:SS±HH:MM`) carried through from `travel-schedule.json` v3. The `days` key is the item's LOCAL date when it has one, its UTC date otherwise. Date-granular readers take the local field first and fall back to the UTC one; see `scripts/check-travel-bookings.py:_item_day`.
 
-`destination` is the trip wrapper's TripIt primary location (`<City>, <Region>`), ICS escapes unwound, and is optional: it is written only when the feed labels the trip. An absent `destination` means the destination is unknown, which no reader may treat as home.
+`destination` is the trip wrapper's TripIt primary location (`<City>, <Region>`) as `travel-schedule.json` carries it — decoded at that writer since its v4 (#275) — and is optional: it is written only when the feed labels the trip. An absent `destination` means the destination is unknown, which no reader may treat as home.
 
 ### v2 → v3
 

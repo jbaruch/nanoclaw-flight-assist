@@ -1,5 +1,19 @@
 # Changelog
 
+### Fixed — every drive anchor was geocoding a backslash
+
+`San Francisco\, CA`. That is what `travel-schedule.json` has carried in `location` since the file existed, and what `trip_origin.resolve_anchor` has been handing out as a drivable address ever since #122 made it one.
+
+RFC 5545 escapes commas in TEXT values, so TripIt sends `San Francisco\, CA` and `refresh-travel-schedule.py` wrote it through verbatim. Nobody noticed because Google's geocoder is forgiving — 86 of the 104 anchor probes over the live feed carried a stray backslash into the routing request and resolved anyway. It is the kind of defect that stays invisible until an upstream tightens its parser, and then every mid-trip drive leg anchors somewhere wrong on the same afternoon.
+
+The writer decodes now (`\,` → `,`, `\;` → `;`, `\\` → `\`, `\n`/`\N` → newline), one pass over the string so `\\,` reads as a literal backslash then a comma rather than being re-read as an escaped comma. #274 had already written exactly this helper downstream in `build-travel-db.py` for the new `destination` field; it only lived there because that field was new. It has moved to the writer and the downstream copy is gone — a second pass would eat the backslash out of an address that legitimately carries one.
+
+Record schema goes to v4 and `travel-core/trip_origin.py`'s gate goes with it. The bump is bookkeeping rather than a compatibility event: nothing downstream ever parsed the escapes, so a v3 reader reads a v4 record identically, and the one cross-plugin reader (`nanoclaw-admin`'s `morning-brief-cfp.py`) does not gate on the version at all. Writer and gating reader ship in this plugin and update together.
+
+Regression pass on the real thing rather than fixtures: the live schedule replayed through `resolve_anchor` at 09:00 and 19:00 UTC on every day it covers. Zero source drift — every anchor still resolves from the same record under the same rule (home / lodging / trip_location) — and zero backslashes left in any resolved address.
+
+`summary` still ships verbatim, escapes and all. It looks like the same one-line fix and is not: `trip_key` derives the `travel-db.json` trip slug from it, drive-engine keys per-trip decision state by that slug, and `lodging_pair_key` pairs check-ins to check-outs by a hotel name parsed out of it. Changing that string is a state-key question, not a text-escaping one. Filed as #278.
+
 ## 0.2.118 — 2026-08-17
 
 ### Fixed — a blank address line read the next line as its value
