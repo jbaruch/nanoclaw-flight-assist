@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 _NOW = datetime(2026, 5, 31, 6, 0, 0, tzinfo=timezone.utc)
 
 
-def _write_db(path, schema_version: int | None = 2):
+def _write_db(path, schema_version: int | None = 3):
     """Write a travel-db.json carrying `schema_version`. Age tests need a
     DB at the current schema so the schema gate stays out of the way; the
     schema tests vary it."""

@@ -237,7 +237,7 @@ def test_stdout_is_structured_json(build_travel_db, monkeypatch, capsys):
     code, out, _ = _run(module, monkeypatch, capsys)
     assert code == 0
     payload = json.loads(out)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["trips_written"] == 1
     assert payload["item_events_written"] == 2
     assert len(payload["trips"]) == 1
@@ -259,7 +259,7 @@ def test_output_stamps_schema_version(build_travel_db, monkeypatch, capsys):
     code, _, _ = _run(module, monkeypatch, capsys)
     assert code == 0
     db = json.loads(db_path.read_text())
-    assert db["schema_version"] == module.SCHEMA_VERSION == 2
+    assert db["schema_version"] == module.SCHEMA_VERSION == 3
 
 
 def test_timed_item_buckets_by_date_and_preserves_time(build_travel_db, monkeypatch, capsys):
@@ -369,3 +369,70 @@ def test_blank_local_stamp_is_not_carried(build_travel_db, monkeypatch, capsys):
     days = db["trips"][next(iter(db["trips"]))]["days"]
     assert "2026-05-22" in days
     assert "start_local" not in days["2026-05-22"][0]
+
+
+# --- v3: trip destination (#271) -------------------------------------------
+
+
+def test_destination_is_persisted_with_ics_escapes_unwound(build_travel_db, monkeypatch, capsys):
+    """The feed writes a trip's primary location as ICS TEXT (`Nashville\\, TN`).
+    The DB carries the readable form — it is what the booking check compares
+    against the operator's configured home metro."""
+    module, schedule_path, db_path = build_travel_db
+    schedule = [
+        {
+            **_trip("trip", "Jets at Titans", "2026-05-01", "2026-05-02"),
+            "location": "Nashville\\, TN",
+        },
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    db = json.loads(db_path.read_text())
+    assert db["trips"][next(iter(db["trips"]))]["destination"] == "Nashville, TN"
+
+
+def test_destination_omitted_when_the_feed_leaves_it_blank(build_travel_db, monkeypatch, capsys):
+    """An unlabelled trip carries no destination at all. Writing "" would be a
+    claim about where the trip goes; absence says the feed never said."""
+    module, schedule_path, db_path = build_travel_db
+    schedule = [
+        {**_trip("trip-blank", "Unlabelled", "2026-05-01", "2026-05-02"), "location": "   "},
+        _trip("trip-absent", "No Location Key", "2026-05-03", "2026-05-04"),
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    db = json.loads(db_path.read_text())
+    for trip in db["trips"].values():
+        assert "destination" not in trip
+
+
+def test_destination_survives_an_escaped_backslash(build_travel_db, monkeypatch, capsys):
+    """One pass over the escapes: `\\\\,` is a literal backslash then a comma,
+    not an escaped comma read twice."""
+    module, schedule_path, db_path = build_travel_db
+    schedule = [
+        {**_trip("trip", "Odd", "2026-05-01", "2026-05-02"), "location": "A\\\\, B"},
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, _, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    db = json.loads(db_path.read_text())
+    assert db["trips"][next(iter(db["trips"]))]["destination"] == "A\\, B"
+
+
+def test_run_summary_reports_destination(build_travel_db, monkeypatch, capsys):
+    """The nightly log shows which trips the booking check will read as local
+    without the operator opening the DB."""
+    module, schedule_path, _ = build_travel_db
+    schedule = [
+        {
+            **_trip("trip", "Jets at Titans", "2026-05-01", "2026-05-02"),
+            "location": "Nashville\\, TN",
+        },
+    ]
+    schedule_path.write_text(json.dumps(schedule))
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    assert json.loads(out)["trips"][0]["destination"] == "Nashville, TN"

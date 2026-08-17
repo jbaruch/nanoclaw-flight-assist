@@ -9,13 +9,14 @@ ALL item types are stored; alert logic lives in the consumers.
 Output: /workspace/group/travel-db.json
 Schema (see sibling `state-schema.md` for the full contract):
   {
-    "schema_version": 2,
+    "schema_version": 3,
     "generated_at": "...",
     "trips": {
       "<slug>": {
         "summary": "...",
         "start":   "YYYY-MM-DD",                       # trip-level: date-only
         "end":     "YYYY-MM-DD",
+        "destination": "Nashville, TN",                # v3, optional
         "days": {
           "YYYY-MM-DD": [               # day key: date-only, local when known
             {"type": "Flight|Lodging|Rail|Car Rental|...",
@@ -35,10 +36,17 @@ Schema (see sibling `state-schema.md` for the full contract):
 are the same instants on the traveller's own clock, present only when the
 schedule resolved them (see `nightly-travel-sync/scripts/tripit_local_time.py`).
 Date-granular consumers read the local field and fall back to the UTC one.
+
+`destination` is the trip wrapper's TripIt primary location (`<City>, <Region>`),
+ICS escapes unwound, omitted when the feed leaves it blank. It is what separates
+a local placeholder trip — one the operator files to block time for a Nashville
+event, with nothing to book — from an away trip that genuinely has no bookings
+yet (#271).
 """
 
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -61,7 +69,24 @@ DB_PATH = "/workspace/group/travel-db.json"
 
 # Bump in lock-step with check-travel-bookings.py per
 # `coding-policy: stateful-artifacts` + state-schema.md sibling file.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# RFC 5545 §3.3.11 TEXT escapes, as they survive into `travel-schedule.json`'s
+# `location` field: the feed writes `Nashville\, TN`. One pass over the string
+# so an escaped backslash (`\\,`) yields a literal backslash followed by a
+# comma rather than being re-read as an escaped comma.
+_ICS_ESCAPE_RE = re.compile(r"\\(.)")
+_ICS_ESCAPES = {"n": "\n", "N": "\n"}
+
+
+def _unescape_ics_text(value: str) -> str:
+    """An ICS TEXT value with its escapes unwound (`Nashville\\, TN`).
+
+    An unknown escape yields the escaped character itself, which is what the
+    spec's `\\;` `\\,` `\\\\` set needs and the safest reading of anything else
+    TripIt emits — never a dropped character.
+    """
+    return _ICS_ESCAPE_RE.sub(lambda m: _ICS_ESCAPES.get(m.group(1), m.group(1)), value)
 
 
 def _parse_day(s: str) -> date:
@@ -160,6 +185,14 @@ def main():
             "days": dict(sorted(days.items())),  # sorted by date
         }
 
+        # v3: the trip's own destination, so a consumer can tell a local
+        # placeholder from an away trip (#271). Written only when the feed
+        # labels the trip — an absent key reads as "destination unknown", which
+        # no consumer may treat as home.
+        location = trip.get("location")
+        if isinstance(location, str) and location.strip():
+            db_trips[slug]["destination"] = _unescape_ics_text(location.strip())
+
     # Forward-incompatibility guard per state-schema.md migration
     # policy: if a future writer has already stamped travel-db.json
     # with a higher schema_version, do NOT overwrite it with this
@@ -216,6 +249,10 @@ def main():
                 "summary": t["summary"],
                 "start": t["start"],
                 "end": t["end"],
+                # Carried into the run summary so an operator reading the
+                # nightly log can see which trips the booking check will read
+                # as local, without opening the DB.
+                "destination": t.get("destination", ""),
                 "type_counts": type_counts,
             }
         )

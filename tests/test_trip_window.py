@@ -151,7 +151,7 @@ def test_unreadable_path_fails_open(tmp_path: Path):
 
 @pytest.mark.parametrize(
     "bad_version",
-    [3, True, 1.0, "1"],
+    [99, True, 1.0, "1"],
     ids=["wrong-int", "bool-true", "float", "string"],
 )
 def test_unaccepted_or_malformed_schema_version_fails_open(tmp_path: Path, bad_version):

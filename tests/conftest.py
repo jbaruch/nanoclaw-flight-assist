@@ -126,6 +126,10 @@ def check_travel_bookings(tmp_path, monkeypatch):
     # The drive engine's verdict store lives in its own state dir; point the
     # cross-skill read at tmp_path too, so no test reads the deployed file.
     monkeypatch.setenv("DRIVE_PLANNER_STATE_DIR", str(tmp_path))
+    # Same for the trusted profile behind the home-metro skip (#271): point it
+    # at a tmp_path file that is NOT created, so the default is "no home metro
+    # configured" and only tests that write it exercise the suppression.
+    monkeypatch.setenv("USER_PROFILE_PATH", str(tmp_path / "user_profile.md"))
     return module, db_path, state_path
 
 

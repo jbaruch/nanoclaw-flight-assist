@@ -70,7 +70,7 @@ CADENCE = timedelta(hours=20)
 # where the builder's plugin mount is not on the path, and the module is
 # stdlib-only by contract. `tests/test_nightly_travel_sync_precheck.py` asserts
 # the mirror against the builder's own SCHEMA_VERSION, so drift fails CI.
-EXPECTED_DB_SCHEMA_VERSION = 2
+EXPECTED_DB_SCHEMA_VERSION = 3
 
 DEFAULT_DB_PATH = "/workspace/group/travel-db.json"
 

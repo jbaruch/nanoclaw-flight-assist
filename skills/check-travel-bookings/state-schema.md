@@ -1,6 +1,6 @@
 # Check Travel Bookings — State Schema
 
-This skill owns two cross-invocation JSON state artifacts under `/workspace/group/`. Per `coding-policy: stateful-artifacts`, both carry a `schema_version` field for auditable migration. `travel-db.json` is at **2**; `travel-booking-state.json` is at **1**.
+This skill owns two cross-invocation JSON state artifacts under `/workspace/group/`. Per `coding-policy: stateful-artifacts`, both carry a `schema_version` field for auditable migration. `travel-db.json` is at **3**; `travel-booking-state.json` is at **1**.
 
 ## `/workspace/group/travel-db.json`
 
@@ -18,13 +18,14 @@ Compact day-indexed projection of upcoming trips.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "generated_at": "YYYY-MM-DDTHH:MM:SSZ",
   "trips": {
     "<slug>": {
       "summary": "...",
       "start": "YYYY-MM-DD",
       "end": "YYYY-MM-DD",
+      "destination": "Nashville, TN",
       "days": { "YYYY-MM-DD": [<item>, ...] }
     }
   }
@@ -32,6 +33,12 @@ Compact day-indexed projection of upcoming trips.
 ```
 
 Each `<item>` carries `type`, `summary`, `start`, `end`, `uid`, and — for a timed record whose local clock resolved — the optional `start_local` / `end_local` stamps (`YYYY-MM-DDTHH:MM:SS±HH:MM`) carried through from `travel-schedule.json` v3. The `days` key is the item's LOCAL date when it has one, its UTC date otherwise. Date-granular readers take the local field first and fall back to the UTC one; see `scripts/check-travel-bookings.py:_item_day`.
+
+`destination` is the trip wrapper's TripIt primary location (`<City>, <Region>`), ICS escapes unwound, and is optional: it is written only when the feed labels the trip. An absent `destination` means the destination is unknown, which no reader may treat as home.
+
+### v2 → v3
+
+Additive (#271): trips gain the optional `destination` field. A v2 DB reads with it simply absent, so `check-travel-bookings.py` and `trip_window.py` both accept `{1, 2, 3}` for the rollout window; `precheck.py`'s schema gate wakes the bundle on a v2 stamp so the next `nightly-travel-sync` fire closes the window rather than waiting for the DB to age past the cadence cap. The field is what separates a local placeholder trip — one the operator files to block time for a home-metro event, with nothing to book — from an away trip that genuinely has no bookings yet; the empty-itinerary signal alone cannot tell them apart.
 
 ### v1 → v2
 
@@ -65,4 +72,4 @@ A `resolved` outcome is represented by removing the entry entirely (the next nig
 
 ## Schema-version constant
 
-Defined in `scripts/build-travel-db.py` (writer) and `scripts/check-travel-bookings.py` (reader) as `SCHEMA_VERSION = 2`. Bump in lock-step when changing the on-disk shape, and widen the readers' accepted sets in the same change.
+Defined in `scripts/build-travel-db.py` (writer) and `scripts/check-travel-bookings.py` (reader) as `SCHEMA_VERSION = 3`. Bump in lock-step when changing the on-disk shape, and widen the readers' accepted sets in the same change.
