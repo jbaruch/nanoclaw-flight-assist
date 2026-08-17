@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.119 — 2026-08-17
+
 ### Fixed — every drive anchor was geocoding a backslash
 
 `San Francisco\, CA`. That is what `travel-schedule.json` has carried in `location` since the file existed, and what `trip_origin.resolve_anchor` has been handing out as a drivable address ever since #122 made it one.
