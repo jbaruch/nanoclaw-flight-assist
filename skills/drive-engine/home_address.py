@@ -17,6 +17,7 @@ The block the trusted plugin writes (Epic #59 §4):
 
     ## Addresses
     <!-- canonical, machine-read by travel tile -->
+    - schema_version: 1
     - current_home: 12 Example St, Sampleton, TN 37000
     - home_airport: BNA
     - new_home_wip: 99 Placeholder Rd, Testburg, TN 37100
@@ -25,9 +26,10 @@ The block the trusted plugin writes (Epic #59 §4):
 construction) is deliberately NOT read — switching origins is a later,
 explicit change, not an automatic pickup of whichever address appears first.
 
-The block parse itself lives in `travel-core/addresses.py`, which every bundle
-reading this block shares; this module owns what an absent `current_home`
-means for drive planning.
+The block parse and the accepted `schema_version` set live in
+`skills/travel-core/addresses.py`, which every bundle reading this block
+shares; this module owns what an absent or unreadable `current_home` means for
+drive planning.
 
 This is the deterministic reader (per `coding-policy: script-delegation` — a
 fixed parse of a fixed block). It does NOT fall back to a guessed address: a
@@ -55,9 +57,14 @@ if not _TRAVEL_CORE.is_dir():
 if str(_TRAVEL_CORE) not in sys.path:
     sys.path.insert(0, str(_TRAVEL_CORE))
 
+from addresses import (  # noqa: E402
+    ACCEPTED_SCHEMA_VERSIONS,
+    is_supported_version,
+    schema_version,
+    values_in,
+)
 from addresses import profile_path as _addresses_profile_path  # noqa: E402
 from addresses import section as _addresses_section  # noqa: E402
-from addresses import values_in  # noqa: E402
 
 # The canonical drive-origin key inside the `## Addresses` block.
 _CURRENT_HOME_KEY = "current_home"
@@ -88,10 +95,12 @@ def read_current_home(*, path: Path | None = None) -> str:
 
     Raises:
         HomeAddressError: when the profile file is missing, carries no
-            `## Addresses` block, or that block carries no non-empty
-            `current_home:` entry — each with a message pointing at the
-            `nanoclaw-trusted` trusted-memory Addresses block to fix. A
-            `current_home:` outside the block is deliberately not read.
+            `## Addresses` block, carries a block stamped with a
+            `schema_version` this reader does not accept, or carries no
+            non-empty `current_home:` entry — each with a message pointing at
+            the fix, the `nanoclaw-trusted` trusted-memory Addresses block or a
+            plugin upgrade. A `current_home:` outside the block is deliberately
+            not read.
     """
     target = path if path is not None else profile_path()
     try:
@@ -111,6 +120,18 @@ def read_current_home(*, path: Path | None = None) -> str:
             f"no `## Addresses` block in {target} — the canonical home address lives in that "
             "block of user_profile.md (nanoclaw-trusted trusted-memory); add it with a "
             "`- current_home: <address>` line and redeploy"
+        )
+    # Schema gate per `coding-policy: stateful-artifacts`: a non-owner reader
+    # accepts the versions it knows and treats any other as no usable prior
+    # state. Here that means refusing rather than degrading — this reader's
+    # whole contract is that it never guesses an origin, and a block shape it
+    # cannot read is not a licence to start.
+    declared = schema_version(section)
+    if not is_supported_version(declared):
+        raise HomeAddressError(
+            f"the `## Addresses` block in {target} is stamped schema_version={declared!r}, "
+            f"outside this reader's accepted {sorted(ACCEPTED_SCHEMA_VERSIONS)} — upgrade the "
+            "jbaruch/nanoclaw-travel plugin so it reads the current block shape"
         )
     values = values_in(section, _CURRENT_HOME_KEY)
     if not values:
