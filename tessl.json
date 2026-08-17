@@ -1,0 +1,12 @@
+{
+  "name": "nanoclaw-travel",
+  "mode": "vendored",
+  "dependencies": {
+    "jbaruch/coding-policy": {
+      "version": "latest"
+    },
+    "finsi/codex-review": {
+      "version": "0.1.2"
+    }
+  }
+}
