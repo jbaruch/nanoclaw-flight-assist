@@ -1,5 +1,11 @@
 # Changelog
 
+### Fixed — align the manifest with the published 0.2.121 (`jbaruch/nanoclaw-travel#282` publish recovery)
+
+The #282 publish run shipped `0.2.121` to the registry, then `smart-publish`'s manifest bump-push to `main` was rejected by a GitHub backend error — `remote: fatal error in commit_refs`, ten seconds after the publish call returned. The action's diagnostic guesses a protected branch; this repo has neither branch protection nor a ruleset, and the `stamp-changelog` push from the same job and the same token landed seconds earlier, so the rejection was transient server-side.
+
+The registry and `CHANGELOG.md` both carry `0.2.121`; only `.tessl-plugin/plugin.json` was left at `0.2.120`. Re-running the publish would have auto-bumped to `0.2.122` and cut a second release of identical content, so this lands the bump commit the run could not push.
+
 ## 0.2.121 — 2026-08-17
 
 ### Chore — the manifest declares `"mode": "managed"`
