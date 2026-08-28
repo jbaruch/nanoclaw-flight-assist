@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.127 — 2026-08-28
+
 ### drive-engine — the cadence sweep stops waking to relay its own notice (`#285`)
 
 The sweep rendered the operator notice deterministically and then woke a Haiku agent whose only instruction was to send it unchanged. SKILL.md Step 1 was explicit — "Send `data.message` verbatim … do not rewrite, summarize, add to it" — and the wake container composed its own text anyway. The template reads "Added a drive for {meeting} at {when} — reply 'skip' if you're not driving to it"; what reached the operator was "Drive engine synced. Added: … Driving to it, or skip?". Drive-by-default became a coin flip, and neither rewritten phrase appears anywhere in the skill.
