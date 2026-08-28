@@ -1,5 +1,17 @@
 # Changelog
 
+### check-travel-bookings — stop nagging about a trip that has already started (`#286`)
+
+The Sunday surface flagged "Onboarding CA 2026 (Aug 17–24) — ничего не забукано" on 2026-08-23. The traveller had been in San Francisco for six days and flew home the next day; the bookings were made out of band and never reached TripIt. There was nothing left to book, so the prompt was noise.
+
+`#120` had already established that an elapsed night is un-bookable and floored the night scan at `today` — but only inside the `has_transport` branch. The `if not items:` early return above it never looked at `today` at all, so an empty itinerary surfaced as `is_empty` whether the trip was future, in progress, or ending tomorrow.
+
+The classifier now also returns `has_bookable_window` (`today < trip_start`), and the empty-itinerary alert gates on it. `is_empty` deliberately keeps its meaning: the trip really does have zero items, and collapsing a departed trip into "not empty" would make the flag lie about the itinerary to express a fact about the calendar. Two separate questions, two separate fields — and the `today`-dependent one stays inside the pure, injected-`today` classifier where `#120`'s flooring already lives, rather than leaking a date comparison into the alert-assembly block.
+
+The window closes at departure, not arrival home: a trip starting today is already too late to book for. `#271`'s home-metro suppression and the away-trip signal are untouched — a FUTURE empty away-trip still fires, which is what this check exists for.
+
+Five tests, three on the classifier and two end to end. The end-to-end pair was confirmed to discriminate: with the alert gate reverted, both fail with the "ничего не забукано" gap present.
+
 ## 0.2.122 — 2026-08-18
 
 ### Fixed — align the manifest with the published 0.2.121 (`jbaruch/nanoclaw-travel#282` publish recovery)

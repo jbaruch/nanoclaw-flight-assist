@@ -223,10 +223,19 @@ def classify_trip(items: list[dict], trip_start: date, trip_end: date, today: da
     classifier stays pure and testable. The night scan is floored at
     `today`: elapsed nights are un-bookable, so they never surface as
     gaps for a trip already underway (jbaruch/nanoclaw-travel#120).
+
+    `has_bookable_window` carries the same "is there anything left to
+    book" question for the whole trip rather than a single night, and is
+    what the empty-itinerary alert gates on (#286). `is_empty` stays a
+    truthful statement about the itinerary — the trip really does have
+    zero items — so the two are reported separately rather than
+    collapsing a departed trip into "not empty".
     """
+    has_bookable_window = today < trip_start
     if not items:
         return {
             "is_empty": True,
+            "has_bookable_window": has_bookable_window,
             "has_transport": False,
             "has_lodging": False,
             "uncovered_nights": [],
@@ -265,6 +274,7 @@ def classify_trip(items: list[dict], trip_start: date, trip_end: date, today: da
 
     return {
         "is_empty": False,
+        "has_bookable_window": has_bookable_window,
         "has_transport": has_transport,
         "has_lodging": has_lodging,
         "has_flight": has_flight,
@@ -561,7 +571,11 @@ def main():
         # ENDS cannot excuse a night in the middle of it. Only a trip with no
         # uncovered night at all leans on the in-transit test.
         trip_needs_lodging = trip_nights >= 1 and (bool(uncovered) or not in_transit_through_end)
-        if classification["is_empty"]:
+        # #286: a trip that has already started has no bookable window left,
+        # so "nothing booked" is noise rather than a prompt — the traveller is
+        # at the destination, having booked out of band or not at all. A FUTURE
+        # empty away-trip is still the signal this check exists for (#271).
+        if classification["is_empty"] and classification["has_bookable_window"]:
             issue = "ничего не забукано"
         elif (
             classification["has_transport"]
