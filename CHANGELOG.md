@@ -1,5 +1,13 @@
 # Changelog
 
+### README — state the `tessl.json` facts, drop the attached rationale (`#281`)
+
+Three spots in the `## Dev toolchain (tessl.json)` section attached why-content with a colon or an em dash. `coding-policy: context-writing-style` forbids that in auto-loaded artifacts, and the README loads on plugin fetch.
+
+The manifest paragraph's colon introduced an explanation of how `tessl.json` stays out of the published plugin; it is now five direct sentences. `coding-policy`'s renewal cell led with "Floats by design —" before naming the carve-out; it now names the carve-out first. `finsi/codex-review`'s cell explained *why* no scanner covers the manifest across an em dash; the quarterly cadence and `tessl outdated` stay, and Renovate's lack of a Tessl datasource is its own sentence.
+
+Deferred from `#280` as advisory, folded in here rather than spending a round on prose alone.
+
 ## 0.2.125 — 2026-08-28
 
 ### nightly-travel-sync — decode ICS escapes in `summary` too (schema v5, `#278`)
