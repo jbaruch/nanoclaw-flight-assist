@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.125 — 2026-08-28
+
 ### nightly-travel-sync — decode ICS escapes in `summary` too (schema v5, `#278`)
 
 `refresh-travel-schedule.py` decoded RFC 5545 TEXT escapes in `LOCATION` at v4 (`#275`) but still wrote `SUMMARY` verbatim, so the live feed's escaped commas rode straight into operator-visible text: `Check-in: Radisson Blu Airport Hotel\, Oslo` is what the booking brief and the drive-engine diagnostics printed.
