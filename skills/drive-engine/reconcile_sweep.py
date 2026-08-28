@@ -408,27 +408,38 @@ def render_notification(
 def build_sweep_payload(
     applied, skipped: list[str], drive_or_fly_questions: list[str] | None = None
 ) -> dict:
-    """Assemble the sweep's stdout payload and wake decision from an ApplyResult.
+    """Assemble the sweep's stdout payload from an ApplyResult.
 
-    Wakes the agent ONLY when the operator has something to act on: a new MEETING
-    drive (which they can skip), a MATERIAL drive-time change (leave earlier /
-    later), or a drive-or-fly question about a flight-less trip. Removes,
-    airport-drive adds, lodging-drive adds, converts, and routine sub-threshold
-    re-times all apply SILENTLY — no wake, no message (the noise this gating
-    exists to kill). `applied` is a `calendar_apply.ApplyResult`.
+    `wake_agent` is always False: the sweep never wakes an agent. The host
+    delivers `data.message` verbatim off that branch (#285).
+
+    A notice is emitted ONLY when the operator has something to act on: a new
+    MEETING drive (which they can skip), a MATERIAL drive-time change (leave
+    earlier / later), or a drive-or-fly question about a flight-less trip.
+    Removes, airport-drive adds, lodging-drive adds, converts, and routine
+    sub-threshold re-times all apply SILENTLY — no message, so the host stays
+    quiet (the noise this gating exists to kill). `applied` is a
+    `calendar_apply.ApplyResult`.
 
     A lodging drive is silent for the same reason an airport drive is: it is not
     skippable. Getting to the trip is the trip.
 
-    `data.message` is the deterministically rendered operator notice (#187): the
-    wake agent sends it verbatim rather than composing one, so a resumed session
-    cannot escalate. The key is always present; its value is the notice string iff
-    the sweep wakes, and `None` on a silent sweep."""
+    `data.message` is the deterministically rendered operator notice (#187). The
+    host delivers it verbatim off the no-wake branch (#285), so no model sees the
+    string and none can rewrite it. The key is always present; its value is the
+    notice string when there is something to say, and `None` otherwise.
+
+    The operator's `skip` / `drive` / `fly` replies are inbound-triggered and
+    wake normally; only this cadence path is silent."""
     added = _group_meeting_adds(applied.added_meeting_legs)
     material = _dedup_material(applied.material_updates)
     questions = list(drive_or_fly_questions or [])
     return {
-        "wake_agent": bool(added) or bool(material) or bool(questions),
+        # Never wake for a notice: the host sends `data.message` verbatim
+        # off the `wake_agent: false` branch (#285). A sweep with nothing
+        # to say emits `message: None` and the host stays silent, which
+        # is the same outcome the old wake gate produced.
+        "wake_agent": False,
         "data": {
             "applied": {
                 "created": applied.created,

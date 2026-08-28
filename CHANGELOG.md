@@ -1,5 +1,17 @@
 # Changelog
 
+### drive-engine — the cadence sweep stops waking to relay its own notice (`#285`)
+
+The sweep rendered the operator notice deterministically and then woke a Haiku agent whose only instruction was to send it unchanged. SKILL.md Step 1 was explicit — "Send `data.message` verbatim … do not rewrite, summarize, add to it" — and the wake container composed its own text anyway. The template reads "Added a drive for {meeting} at {when} — reply 'skip' if you're not driving to it"; what reached the operator was "Drive engine synced. Added: … Driving to it, or skip?". Drive-by-default became a coin flip, and neither rewritten phrase appears anywhere in the skill.
+
+`jbaruch/nanoclaw` 1.2.165 added the delivery path this needs: a precheck returning `wake_agent: false` can carry a `data.message`, and the host sends it byte-for-byte without spawning anything. `build_sweep_payload` now returns `wake_agent: False` unconditionally. The notice still renders exactly as before; no model sees it, so none can rewrite it.
+
+Silent sweeps are unchanged — `message` is `None` and the host's delivery branch requires a non-empty string, so the outcome matches what the old wake gate produced. A notice fire now costs zero model tokens instead of a Haiku spawn.
+
+The relay step is gone from SKILL.md, and the remaining steps renumber 2–4 → 1–3. The `description:` frontmatter moves with it — it still promised the sweep would wake you, which is the discovery surface an agent reads first, and the repo's 1024-character limit test caught the first rewrite at 1033. `build_sweep_payload`'s docstring had the same drift: its opening still described the old wake gate while a later paragraph described the new one, and SKILL.md names that docstring authoritative. Putting the description under review also surfaced a pre-existing gap — an action router must list every action it offers, and Step 3's (report a drive block that looks wrong or missing) had never been there. The opening prose was tightened to make room inside the 1024-character limit. `check-travel-bookings`' cross-reference to the drive-or-fly step moved from Step 3 to Step 2 in lock-step. The operator's `skip` / `drive` / `fly` replies are inbound-triggered and wake normally, untouched.
+
+Five tests asserted `wake_agent is True` to mean "the sweep has something to say". That is now expressed by `data.message` being present, so they assert the message and the no-wake invariant rather than flipping to an assertion that would pass trivially; two whose names described the wake are renamed.
+
 ## 0.2.126 — 2026-08-28
 
 ### README — state the `tessl.json` facts, drop the attached rationale (`#281`)

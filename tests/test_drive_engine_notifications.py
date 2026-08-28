@@ -261,7 +261,11 @@ def test_meeting_legs_grouped_one_per_meeting_earliest_anchor():
         {"meeting": "Massage", "when": "Sat Jul 18, 09:50"},  # earliest leg wins, chronological
         {"meeting": "Dentist", "when": "Mon Jul 20, 08:00"},
     ]
-    assert payload["wake_agent"] is True
+    # #285: the sweep no longer wakes for a notice — the host delivers
+    # `data.message` verbatim. "Has something to say" is now the message
+    # being present, and the no-wake invariant is asserted alongside it.
+    assert payload["data"]["message"]
+    assert payload["wake_agent"] is False
 
 
 def test_wake_false_on_removes_and_routine_only():
@@ -273,7 +277,7 @@ def test_wake_false_on_removes_and_routine_only():
     assert payload["data"]["applied"]["deleted"] == 4  # still reported in counts
 
 
-def test_wake_true_on_material_update_alone():
+def test_material_update_alone_produces_a_notice():
     applied = ApplyResult(updated=1)
     applied.material_updates = [
         {
@@ -286,7 +290,11 @@ def test_wake_true_on_material_update_alone():
         }
     ]
     payload = build_sweep_payload(applied, [])
-    assert payload["wake_agent"] is True
+    # #285: the sweep no longer wakes for a notice — the host delivers
+    # `data.message` verbatim. "Has something to say" is now the message
+    # being present, and the no-wake invariant is asserted alongside it.
+    assert payload["data"]["message"]
+    assert payload["wake_agent"] is False
     assert payload["data"]["material_updates"] == [
         {"meeting": "Massage", "minutes": 5, "direction": "sooner", "when": "Sat Jul 18, 10:35"}
     ]
@@ -392,7 +400,11 @@ def test_payload_carries_rendered_message_on_wake():
         }
     ]
     payload = build_sweep_payload(applied, [])
-    assert payload["wake_agent"] is True
+    # #285: the sweep no longer wakes for a notice — the host delivers
+    # `data.message` verbatim. "Has something to say" is now the message
+    # being present, and the no-wake invariant is asserted alongside it.
+    assert payload["data"]["message"]
+    assert payload["wake_agent"] is False
     assert payload["data"]["message"] == "Traffic: leave 5 min sooner for your Massage at Sat 10:35"
 
 
@@ -412,11 +424,15 @@ _QUESTION = (
 )
 
 
-def test_a_drive_or_fly_question_alone_wakes_the_agent():
+def test_a_drive_or_fly_question_alone_produces_a_notice():
     """The operator owes an answer, so this is the one lodging-side event worth
     interrupting for."""
     payload = build_sweep_payload(ApplyResult(), [], [_QUESTION])
-    assert payload["wake_agent"] is True
+    # #285: the sweep no longer wakes for a notice — the host delivers
+    # `data.message` verbatim. "Has something to say" is now the message
+    # being present, and the no-wake invariant is asserted alongside it.
+    assert payload["data"]["message"]
+    assert payload["wake_agent"] is False
     assert payload["data"]["message"] == _QUESTION
     assert payload["data"]["drive_or_fly_questions"] == [_QUESTION]
 
@@ -478,5 +494,32 @@ def test_the_same_change_inside_the_horizon_does_notify():
     )
     applied = apply_plan(plan, calendar=FakeCalendar(), calendar_id="primary", now=NOW_APPLY)
     payload = build_sweep_payload(applied, [])
-    assert payload["wake_agent"] is True
+    # #285: the sweep no longer wakes for a notice — the host delivers
+    # `data.message` verbatim. "Has something to say" is now the message
+    # being present, and the no-wake invariant is asserted alongside it.
+    assert payload["data"]["message"]
+    assert payload["wake_agent"] is False
     assert "leave 15 min sooner" in payload["data"]["message"]
+
+
+# --- #285: the sweep never wakes; the host delivers the notice ---------------
+
+
+def test_the_sweep_never_wakes_even_with_a_notice_to_deliver():
+    """The invariant #285 rests on. `wake_agent` is False on every cadence
+    sweep — including one with a notice — because the host sends
+    `data.message` verbatim off the no-wake branch. Waking an agent to
+    relay it is what let a Haiku container rewrite a drive-by-default
+    line into a false binary."""
+    payload = build_sweep_payload(ApplyResult(), [], [_QUESTION])
+    assert payload["wake_agent"] is False
+    assert payload["data"]["message"] == _QUESTION
+
+
+def test_a_silent_sweep_carries_no_message_so_the_host_stays_quiet():
+    """The other half: nothing to say means `message` is None, and the
+    host's delivery branch requires a non-empty string. Same outcome the
+    old wake gate produced, reached without a model."""
+    payload = build_sweep_payload(ApplyResult(), [])
+    assert payload["wake_agent"] is False
+    assert payload["data"]["message"] is None
