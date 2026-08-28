@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.123 — 2026-08-28
+
 ### check-travel-bookings — stop nagging about a trip that has already started (`#286`)
 
 The Sunday surface flagged "Onboarding CA 2026 (Aug 17–24) — ничего не забукано" on 2026-08-23. The traveller had been in San Francisco for six days and flew home the next day; the bookings were made out of band and never reached TripIt. There was nothing left to book, so the prompt was noise.
