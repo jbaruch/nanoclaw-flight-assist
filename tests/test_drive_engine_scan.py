@@ -14,6 +14,7 @@ import sys
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -945,8 +946,8 @@ def _tz_meeting(dt_iso: str, tz: str | None) -> dict:
     }
 
 
-def _scanned_tz(dt_iso: str, tz: str | None) -> str | None:
-    [result] = scan([_tz_meeting(dt_iso, tz)], now=NOW, home_address=HOME)
+def _scanned_tz(dt_iso: str, tz: str | None, *, now: datetime = NOW) -> str | None:
+    [result] = scan([_tz_meeting(dt_iso, tz)], now=now, home_address=HOME)
     return result.timezone
 
 
@@ -972,9 +973,27 @@ def test_scan_keeps_genuine_utc():
 
 def test_scan_keeps_dst_correct_names_across_the_boundary():
     """The check compares the zone's offset AT THAT INSTANT, not a fixed
-    one, so the same IANA name survives on both sides of a DST change."""
-    assert _scanned_tz("2026-12-15T09:00:00-06:00", "America/Chicago") == "America/Chicago"  # CST
-    assert _scanned_tz("2026-07-15T09:00:00-05:00", "America/Chicago") == "America/Chicago"  # CDT
+    one, so the same IANA name survives on both sides of a DST change.
+
+    Both instants are derived from the pinned `NOW` by fixed offsets, so
+    neither is a future-date literal (`coding-policy: testing-standards`
+    Determinism). The winter case needs its own injected clock too:
+    `scan` filters a meeting starting before the `now` it is given, so a
+    January meeting cannot be scanned against a July `now`."""
+    # The module-level `CT` is a FIXED -05:00 offset, so it can never
+    # express CST. This test needs the real DST-aware zone.
+    chicago = ZoneInfo("America/Chicago")
+    winter_now = (NOW - timedelta(days=180)).astimezone(chicago)  # early Jan
+    winter_meeting = (winter_now + timedelta(days=13)).astimezone(chicago)
+    assert winter_meeting.utcoffset() == timedelta(hours=-6)  # CST, not CDT
+    assert (
+        _scanned_tz(winter_meeting.isoformat(), "America/Chicago", now=winter_now)
+        == "America/Chicago"
+    )
+
+    summer_meeting = (NOW + timedelta(days=14)).astimezone(chicago)  # mid-July
+    assert summer_meeting.utcoffset() == timedelta(hours=-5)  # CDT
+    assert _scanned_tz(summer_meeting.isoformat(), "America/Chicago") == "America/Chicago"
 
 
 def test_scan_falls_back_to_offset_when_no_timezone_declared():
