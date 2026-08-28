@@ -807,16 +807,18 @@ def test_lodging_pairing_requires_trip_id(refresh_travel_schedule, monkeypatch, 
 # ---------------------------------------------------------------------------
 
 
-def test_decoded_summary_yields_the_same_trip_key_slug():
+def test_decoded_summary_yields_the_same_trip_key_slug(monkeypatch):
     """The open question in #278: decoding could change the slug
     `travel-db.json` and drive-engine's per-trip verdict store key on,
     orphaning stored decisions. It cannot — `trip_key` slugifies via
     `[^a-z0-9]+`, which collapses the backslash and the comma into the
     same `-`, so both spellings produce a byte-identical slug."""
-    import sys
+    # `monkeypatch.syspath_prepend` undoes the insert at teardown, so no
+    # later test inherits the mutation (testing-standards Independence).
+    # A bare `sys.path.insert` leaks it process-wide.
     from pathlib import Path
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "travel-core"))
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "skills" / "travel-core"))
     from trip_key import trip_key
 
     raw = "Check-in: Radisson Blu Airport Hotel\\, Oslo"
