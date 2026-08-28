@@ -327,9 +327,10 @@ def _tz_is_trustworthy(tz_name: str, parsed: datetime | None) -> bool:
     (#284). It is trustworthy only when it resolves AND its real offset at
     that instant equals the one the `dateTime` carries.
 
-    An unresolvable name is NOT trustworthy: `_start_in_local` cannot resolve
-    it either and falls back to UTC, which reproduces the very wrong-time
-    notice this guard exists to stop. The caller prefers the offset-derived
+    A name that cannot be resolved, or cannot be applied to this instant,
+    is NOT trustworthy: `_start_in_local` cannot resolve it either and
+    falls back to UTC, which reproduces the very wrong-time notice this
+    guard exists to stop. The caller prefers the offset-derived
     zone in that case (`coding-policy: error-handling` Graceful Fallback —
     try the alternative before failing), keeping the unusable name only when
     no `Etc/GMT±N` maps.
@@ -341,7 +342,12 @@ def _tz_is_trustworthy(tz_name: str, parsed: datetime | None) -> bool:
         return True
     try:
         declared = parsed.astimezone(ZoneInfo(tz_name)).utcoffset()
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OverflowError):
+        # OverflowError: `astimezone` on a boundary instant can walk past
+        # `datetime.min`/`max` — `0001-01-01T00:00:00+14:00` does. It is
+        # syntactically valid input, and `_parse_event`'s contract is that
+        # one malformed event never aborts a wide-window sweep, so it is
+        # handled here rather than allowed to propagate.
         return False
     return declared == parsed.utcoffset()
 

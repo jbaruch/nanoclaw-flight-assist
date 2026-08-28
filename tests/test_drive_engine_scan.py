@@ -1014,3 +1014,16 @@ def test_scan_keeps_an_unresolvable_name_with_no_etc_mapping():
     offset has no `Etc/GMT±N` to fall back to, so there is nothing better
     to offer."""
     assert _scanned_tz("2026-08-22T09:00:00+05:30", "Mars/Phobos") == "Mars/Phobos"
+
+
+def test_scan_survives_a_boundary_datetime_that_overflows_conversion():
+    """`_parse_event`'s contract is that one malformed event never aborts a
+    wide-window sweep. `0001-01-01T00:00:00+14:00` is syntactically valid,
+    but converting it into a named zone walks past `datetime.min` and
+    raises OverflowError — so the trust check treats it as untrustworthy
+    rather than letting it propagate and kill the scan. Caught in review."""
+    events = [_tz_meeting("0001-01-01T00:00:00+14:00", "America/Chicago")]
+    [result] = scan(events, now=NOW, home_address=HOME)
+    # The event is millennia in the past, so it buckets as `past` — the
+    # point is that the sweep reaches a verdict at all instead of raising.
+    assert result.bucket == "past"

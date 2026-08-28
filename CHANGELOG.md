@@ -8,6 +8,8 @@ A meeting-drive notice announced a 09:00 PDT San Francisco event as **16:00**. T
 
 The declaration and the offset describe the same instant twice, so a disagreement between them is self-evident: `_tz_is_trustworthy` resolves the declared name at that instant and compares its real UTC offset against the one the `dateTime` carries. On a mismatch the zone is derived from the offset instead (`Etc/GMT±N`, the same fallback the no-`timeZone` path already uses). Comparing at the instant rather than against a fixed offset means a correct name survives a DST boundary — `America/Chicago` is kept at both `-06:00` in January and `-05:00` in July.
 
+A declared name the check cannot *apply* is treated the same as one that contradicts. Alongside an unresolvable zone that covers `OverflowError`: `astimezone` on a boundary instant such as `0001-01-01T00:00:00+14:00` walks past `datetime.min`, and `_parse_event`'s contract is that one malformed event never aborts a wide-window sweep, so it is handled rather than allowed to propagate. Caught in review.
+
 An unresolvable declared name is treated the same as a contradicting one. The first draft kept it, reasoning that a check which could not run is not evidence of a contradiction — but `_start_in_local` cannot resolve it either and falls back to UTC, which reproduces the exact wrong-time notice. Review caught it; `coding-policy: error-handling` Graceful Fallback says try the available alternative before failing, and the offset is available.
 
 The declared name survives in exactly two cases: it agrees with its offset (the overwhelmingly common case), or it is untrustworthy but the offset is not a whole hour so no `Etc/GMT±N` maps — a wrong name still beats no zone at all.
