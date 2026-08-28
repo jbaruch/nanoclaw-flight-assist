@@ -420,15 +420,25 @@ def build_sweep_payload(
     A lodging drive is silent for the same reason an airport drive is: it is not
     skippable. Getting to the trip is the trip.
 
-    `data.message` is the deterministically rendered operator notice (#187): the
-    wake agent sends it verbatim rather than composing one, so a resumed session
-    cannot escalate. The key is always present; its value is the notice string iff
-    the sweep wakes, and `None` on a silent sweep."""
+    `data.message` is the deterministically rendered operator notice (#187). The
+    host delivers it verbatim off the no-wake branch (#285), so no model sees the
+    string and none can rewrite it. The key is always present; its value is the
+    notice string when there is something to say, and `None` otherwise.
+
+    `wake_agent` is therefore always False on a cadence sweep. It used to be True
+    whenever there was a notice, purely so an agent could relay `data.message` —
+    and the Haiku wake container rewrote it anyway, turning a drive-by-default
+    line into a false binary. The relay step is gone; the operator's `skip` /
+    `drive` / `fly` replies are inbound-triggered and still wake normally."""
     added = _group_meeting_adds(applied.added_meeting_legs)
     material = _dedup_material(applied.material_updates)
     questions = list(drive_or_fly_questions or [])
     return {
-        "wake_agent": bool(added) or bool(material) or bool(questions),
+        # Never wake for a notice: the host sends `data.message` verbatim
+        # off the `wake_agent: false` branch (#285). A sweep with nothing
+        # to say emits `message: None` and the host stays silent, which
+        # is the same outcome the old wake gate produced.
+        "wake_agent": False,
         "data": {
             "applied": {
                 "created": applied.created,
