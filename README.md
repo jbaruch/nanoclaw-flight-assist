@@ -58,12 +58,12 @@ Travel history is the same story. **`jbaruch/tripit-api`** ships the `using-trip
 
 ## Dev toolchain (`tessl.json`)
 
-`tessl.json` is the maintainer-side manifest — what `tessl install` reads in a clone of this repo. It ships nothing to a consumer: `.tesslignore` keeps it out of the published plugin, and `.tessl/` (the resolved cache it fills) stays gitignored.
+`tessl.json` is the maintainer-side manifest. `tessl install` reads it in a clone of this repo. It ships nothing to a consumer. `.tesslignore` keeps it out of the published plugin. `.tessl/`, the resolved cache it fills, stays gitignored.
 
 | Dependency | Specifier | Renewal |
 |------------|-----------|---------|
-| `jbaruch/coding-policy` | `latest` | Floats by design — the Runtime-Managed Manifest carve-out in `coding-policy: dependency-management`. The plugin's `SessionStart` hook flags any `jbaruch/*` dep that is not `latest`. |
-| `finsi/codex-review` | pinned | Reviewed **quarterly**: run `tessl outdated`, bump in its own PR. No scanner covers this manifest — Renovate has no Tessl datasource, so there is nothing to automate against (see [renovate.json](renovate.json) for what it does cover). |
+| `jbaruch/coding-policy` | `latest` | Covered by the Runtime-Managed Manifest carve-out in `coding-policy: dependency-management`. The plugin's `SessionStart` hook flags any `jbaruch/*` dep that is not `latest`. |
+| `finsi/codex-review` | pinned | Reviewed **quarterly**. Run `tessl outdated`, bump in its own PR. No scanner covers this manifest. Renovate has no Tessl datasource. See [renovate.json](renovate.json) for what it does cover. |
 
 ## Rules
 
