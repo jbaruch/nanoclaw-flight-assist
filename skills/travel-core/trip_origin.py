@@ -81,7 +81,7 @@ SCHEDULE_PATH = "/workspace/group/travel-schedule.json"
 # reader treats as v1; any record carrying a HIGHER version marks the whole
 # file forward-incompatible — this reader is lagging, so it takes the
 # no-usable-schedule path rather than guessing at a shape it doesn't know.
-SCHEDULE_SCHEMA_VERSION = 4
+SCHEDULE_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)

@@ -43,7 +43,7 @@ OUTPUT_PATH = "/workspace/group/travel-schedule.json"
 # in full from the live TripIt ICS every run (no in-place migration —
 # the writer always emits the current version, cross-plugin readers gate
 # on it). See the sibling `state-schema.md` for the owner/reader contract.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # RFC 5545 §3.3.11 TEXT escapes, as the feed writes them: `San Francisco\, CA`.
 # One pass over the string so an escaped backslash (`\\,`) yields a literal
@@ -208,7 +208,25 @@ def main():
 
         parsed.append(
             {
-                "summary": _get_field(component, "SUMMARY"),
+                # v5: decoded, matching `location`. The feed escapes
+                # commas here too (`Check-in: Radisson Blu Airport
+                # Hotel\\, Oslo`), and the string is operator-visible —
+                # the booking brief and the drive-engine diagnostics
+                # print it as-is (#278).
+                #
+                # Safe to decode at the writer because every parse key
+                # derived from it is unchanged by the escape:
+                #   * `trip_key` slugs via `[^a-z0-9]+`, which collapses
+                #     the backslash and the comma into the same `-`, so
+                #     slugs are byte-identical either way and no stored
+                #     per-trip drive verdict is orphaned;
+                #   * `lodging_pair_key` parses both the check-in and
+                #     the check-out from summaries decoded the same way,
+                #     so a stay's two halves still pair;
+                #   * `flight_summaries` reads IATA designators, which
+                #     carry no TEXT escapes to unwind.
+                # All three are pinned by tests rather than assumed.
+                "summary": _unescape_ics_text(_get_field(component, "SUMMARY")),
                 "start": start,
                 "start_timed": start_timed,
                 "end": end,
