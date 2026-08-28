@@ -13,14 +13,14 @@ Flat list of upcoming TripIt events, projected from the live ICS feed.
   - `scripts/check-travel-freshness.py` (same plugin, Step 3 reads **mtime only**, never the body)
   - `nanoclaw-admin`'s `morning-brief` and `check-cfps` (cross-plugin via the shared `/workspace/group/` mount, reading Trip-type records for travel-conflict checks)
 
-### Shape (schema_version 4)
+### Shape (schema_version 5)
 
 A JSON array. Each element is one event record:
 
 ```json
 [
   {
-    "schema_version": 4,
+    "schema_version": 5,
     "summary": "WN1683 SFO to BNA",
     "start": "2026-08-23T06:05:00Z",
     "end": "2026-08-23T10:30:00Z",
@@ -36,8 +36,8 @@ A JSON array. Each element is one event record:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | integer | yes | Currently `4`. Present on every record (the artifact is a bare array, with no top-level object to hold a single version). |
-| `summary` | string | yes | Event title from the ICS `SUMMARY`, verbatim — escapes included (`Check-in: Radisson Blu Airport Hotel\, Oslo`). Only `location` is decoded; a reader matching on a hotel name handles the escape itself (#278). |
+| `schema_version` | integer | yes | Currently `5`. Present on every record (the artifact is a bare array, with no top-level object to hold a single version). |
+| `summary` | string | yes | Event title from the ICS `SUMMARY`, RFC 5545 TEXT escapes decoded (**since v5**): `Check-in: Radisson Blu Airport Hotel, Oslo`, never `...Hotel\, Oslo`. Operator-visible — the booking brief and drive-engine diagnostics print it as-is (#278). |
 | `start` / `end` | string | yes | `YYYY-MM-DD` for date-only VEVENTs (trip wrappers). `YYYY-MM-DDTHH:MM:SSZ` for timed VEVENTs (flights, lodging check-ins, rentals). Always UTC — the feed emits no `TZID`. |
 | `start_local` / `end_local` | string | no | The same instants on the traveller's own clock, `YYYY-MM-DDTHH:MM:SS±HH:MM` (**added in v3**). Timed records only, and each half only when its OWN printed clock resolved — an arrival carries the destination's offset, and neither half ever inherits the other's. A single-location record (lodging, car rental) gets a `start_local` and no `end_local`. Reconstruction and its refusal conditions live in `scripts/tripit_local_time.py` — do not restate them here. |
 | `location` | string | no | ICS `LOCATION`, RFC 5545 TEXT escapes decoded (**since v4**): `San Francisco, CA`, never `San Francisco\, CA`. Readers hand this string to a geocoder as a drivable address. `\n` / `\N` decode to a newline, so a multi-line venue address arrives as real lines. |
@@ -54,6 +54,18 @@ Additive: the record gains the optional `description` field. No stored state to 
 ### v2 → v3
 
 Additive: the record gains the optional `start_local` / `end_local` fields (#268). No stored state to migrate — the schedule is regenerated in full each run, so the next Step 2 emits v3 records. `travel-core/trip_origin.py` bumped its `SCHEDULE_SCHEMA_VERSION` to `3`; it reads instants rather than dates and does not read the local fields, so v2 and v3 read identically there. The gate accepts every version at or below its constant, so v2 records on disk during the rollout window still read.
+
+### v4 → v5
+
+Value-shape: `summary` arrives with its RFC 5545 escapes decoded (#278), matching what v4 did for `location`. No stored state to migrate — the schedule is regenerated in full each run, so the next Step 2 emits v5 records. `travel-core/trip_origin.py` bumped its `SCHEDULE_SCHEMA_VERSION` to `5`; both ship in this plugin and update together.
+
+Decoding at the writer is safe for every key derived from `summary`, and each is pinned by a test rather than assumed:
+
+- `trip_key` slugifies via `[^a-z0-9]+`, which collapses the backslash and the comma into the same `-`. Slugs are byte-identical before and after the decode, so no stored per-trip drive-engine verdict is orphaned. This was the open question in #278 and it resolves in favour of decode-at-writer.
+- `lodging_pair_key` parses a stay's check-in and check-out from summaries decoded the same way, so the two halves still pair.
+- `flight_summaries` reads IATA designators, which carry no TEXT escapes to unwind.
+
+A v4 reader parses a v5 record's fields identically — the decode removes characters no reader ever parsed on — so a version-agnostic cross-plugin reader is unaffected. The gate accepts every version at or below its constant, so v4 records on disk during the rollout window still read.
 
 ### v3 → v4
 

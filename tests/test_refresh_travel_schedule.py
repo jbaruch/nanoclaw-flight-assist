@@ -472,7 +472,7 @@ def test_timed_event_emits_local_stamps(refresh_travel_schedule, monkeypatch, ca
     assert events[0]["start"] == "2026-05-23T06:05:00Z"
     assert events[0]["start_local"] == "2026-05-22T23:05:00-07:00"
     assert events[0]["end_local"] == "2026-05-23T05:30:00-05:00"
-    assert events[0]["schema_version"] == 4
+    assert events[0]["schema_version"] == 5
 
 
 def test_date_only_event_gets_no_local_stamps(refresh_travel_schedule, monkeypatch, capsys):
@@ -632,10 +632,13 @@ def test_location_newline_and_semicolon_escapes_are_decoded(
     assert events[0]["location"] == "Moscone Center\n747 Howard St; Hall A"
 
 
-def test_summary_and_description_stay_verbatim(refresh_travel_schedule, monkeypatch, capsys):
-    """Only `location` decodes. `description` is the raw DESCRIPTION every
-    downstream parser (`tripit_local_time`, drive-engine's route reader) reads
-    escapes and all, and `summary` keeps the feed's own text (#278)."""
+def test_summary_and_location_decode_description_stays_verbatim(
+    refresh_travel_schedule, monkeypatch, capsys
+):
+    """`summary` joins `location` in decoding (#278) — both are
+    operator-visible. `description` stays raw: every downstream parser
+    (`tripit_local_time`, drive-engine's route reader) reads it escapes and
+    all, so decoding it would break them."""
     module, url_path, output_path = refresh_travel_schedule
     url_path.write_text("https://tripit.example.test/feed.ics\n")
     body = _ics(
@@ -653,7 +656,7 @@ def test_summary_and_description_stay_verbatim(refresh_travel_schedule, monkeypa
     code, _, _ = _run(module, monkeypatch, capsys)
     assert code == 0
     events = json.loads(output_path.read_text())
-    assert events[0]["summary"] == "Check-in: Radisson Blu Airport Hotel\\, Oslo"
+    assert events[0]["summary"] == "Check-in: Radisson Blu Airport Hotel, Oslo"
     assert events[0]["description"] == "[Lodging] Arrive Radisson\\nSun\\, Aug 23"
     assert events[0]["location"] == "Hotellvegen, 2060 Gardermoen, Norway"
 
@@ -797,3 +800,39 @@ def test_lodging_pairing_requires_trip_id(refresh_travel_schedule, monkeypatch, 
     summaries = [e["summary"] for e in events]
     assert "Check-in: Untagged Inn" not in summaries  # past, unrescued
     assert "Check-out: Untagged Inn" in summaries  # future, kept on its own
+
+
+# ---------------------------------------------------------------------------
+# #278: decoding `summary` at the writer must not move any parse key
+# ---------------------------------------------------------------------------
+
+
+def test_decoded_summary_yields_the_same_trip_key_slug():
+    """The open question in #278: decoding could change the slug
+    `travel-db.json` and drive-engine's per-trip verdict store key on,
+    orphaning stored decisions. It cannot — `trip_key` slugifies via
+    `[^a-z0-9]+`, which collapses the backslash and the comma into the
+    same `-`, so both spellings produce a byte-identical slug."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "travel-core"))
+    from trip_key import trip_key
+
+    raw = "Check-in: Radisson Blu Airport Hotel\\, Oslo"
+    decoded = "Check-in: Radisson Blu Airport Hotel, Oslo"
+    assert trip_key(raw, "2026-08-31") == trip_key(decoded, "2026-08-31")
+
+
+def test_decoded_summary_still_pairs_a_lodging_check_in_to_its_check_out(
+    refresh_travel_schedule,
+):
+    """A stay's two halves come from the same feed and decode the same way,
+    so `lodging_pair_key` still matches them. #278 asked for a regression
+    pass here rather than an assumption."""
+    module, _, _ = refresh_travel_schedule
+    url = "https://www.tripit.com/trip/show/id/12345"
+    _, key_in = module.lodging_pair_key("Check-in: Radisson Blu Airport Hotel, Oslo", url)
+    _, key_out = module.lodging_pair_key("Check-out: Radisson Blu Airport Hotel, Oslo", url)
+    assert key_in == key_out
+    assert key_in == ("12345", "Radisson Blu Airport Hotel, Oslo")

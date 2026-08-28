@@ -1,5 +1,17 @@
 # Changelog
 
+### nightly-travel-sync — decode ICS escapes in `summary` too (schema v5, `#278`)
+
+`refresh-travel-schedule.py` decoded RFC 5545 TEXT escapes in `LOCATION` at v4 (`#275`) but still wrote `SUMMARY` verbatim, so the live feed's escaped commas rode straight into operator-visible text: `Check-in: Radisson Blu Airport Hotel\, Oslo` is what the booking brief and the drive-engine diagnostics printed.
+
+`#278` did not prescribe a fix, because `summary` is load-bearing in a way `location` is not — `trip_key` derives the slug that keys `travel-db.json` and drive-engine's per-trip verdict store from it, so a decode that moved the slug would orphan stored decisions. The issue asked for that to be confirmed before choosing decode-at-writer over decode-at-display.
+
+It is confirmed, and it resolves in favour of the writer. `trip_key` slugifies through `_NON_SLUG_RE = [^a-z0-9]+`, which collapses a backslash and a comma into the same `-` — so `check-in-radisson-blu-airport-hotel-oslo-2026-08` comes out byte-identical either way and no verdict is orphaned. `lodging_pair_key` parses a stay's check-in and check-out from summaries decoded the same way, so the two halves still pair. `flight_summaries` reads IATA designators, which carry no TEXT escapes at all. Each of the three is now pinned by a test rather than argued.
+
+Schema bumps 4 → 5, mirroring the v3 → v4 shape. The schedule is regenerated in full each run, so there is no stored state to migrate; `travel-core`'s `SCHEDULE_SCHEMA_VERSION` moves in lock-step, and a v4 reader parses a v5 record identically because the decode only removes characters no reader ever matched on.
+
+`description` deliberately stays verbatim: `tripit_local_time` and drive-engine's route reader parse it escapes and all, so decoding it would break them. The test that used to assert both fields stayed raw now asserts the split.
+
 ## 0.2.124 — 2026-08-28
 
 ### drive-engine — distrust a `timeZone` that contradicts its own `dateTime` offset (`#284`)
