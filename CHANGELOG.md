@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.124 — 2026-08-28
+
 ### drive-engine — distrust a `timeZone` that contradicts its own `dateTime` offset (`#284`)
 
 A meeting-drive notice announced a 09:00 PDT San Francisco event as **16:00**. The event carried `"dateTime": "2026-08-22T09:00:00-07:00"` with `"timeZone": "UTC"` — a Luma/Partiful-style import that wrote a Pacific wall-clock and stamped the wrong zone on it.
