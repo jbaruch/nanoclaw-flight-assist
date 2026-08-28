@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.126 — 2026-08-28
+
 ### README — state the `tessl.json` facts, drop the attached rationale (`#281`)
 
 Three spots in the `## Dev toolchain (tessl.json)` section attached why-content with a colon or an em dash. `coding-policy: context-writing-style` forbids that in auto-loaded artifacts, and the README loads on plugin fetch.
