@@ -1,5 +1,19 @@
 # Changelog
 
+### drive-engine — distrust a `timeZone` that contradicts its own `dateTime` offset (`#284`)
+
+A meeting-drive notice announced a 09:00 PDT San Francisco event as **16:00**. The event carried `"dateTime": "2026-08-22T09:00:00-07:00"` with `"timeZone": "UTC"` — a Luma/Partiful-style import that wrote a Pacific wall-clock and stamped the wrong zone on it.
+
+`_extract_timezone` took `start.timeZone` verbatim, so `DesiredBlock.timezone` became `"UTC"` and `_start_in_local` rendered the instant in UTC. The unresolvable-zone fallback that exists for exactly this shape never tripped, because `"UTC"` is a perfectly valid IANA name — the fallback was built for a *missing or invalid* zone, and this one is valid-but-wrong. It rendered faithfully in the wrong zone.
+
+The declaration and the offset describe the same instant twice, so a disagreement between them is self-evident: `_tz_matches_offset` resolves the declared name at that instant and compares its real UTC offset against the one the `dateTime` carries. On a mismatch the zone is derived from the offset instead (`Etc/GMT±N`, the same fallback the no-`timeZone` path already uses). Comparing at the instant rather than against a fixed offset means a correct name survives a DST boundary — `America/Chicago` is kept at both `-06:00` in January and `-05:00` in July.
+
+Three cases deliberately keep the declared name: one that agrees with its offset (the overwhelmingly common case), one whose zone `ZoneInfo` cannot resolve (the comparison could not run, so it is not evidence of a contradiction), and a contradicting one whose offset is not a whole hour and has no `Etc/GMT±N` to map to — a wrong name still beats no zone at all.
+
+Verified end to end on the incident's instant: `Sat Aug 22, 16:00` becomes `Sat Aug 22, 09:00`.
+
+Not fixed here: `#285`, the notice-rewrite bug that co-surfaced in the same message. That one needs a delivery path that does not pass the rendered string through a model, and no such path exists in this plugin — every skill here routes chat through the agent's `mcp__nanoclaw__send_message`. It is host work.
+
 ## 0.2.123 — 2026-08-28
 
 ### check-travel-bookings — stop nagging about a trip that has already started (`#286`)

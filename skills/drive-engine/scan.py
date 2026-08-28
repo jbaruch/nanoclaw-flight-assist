@@ -80,6 +80,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # A meeting whose start is at or before `now` is in the past and is never
 # planned (lombot #28). A small grace window keeps a meeting that started a
@@ -318,6 +319,26 @@ def _etc_zone(dt: datetime | None) -> str | None:
     return "Etc/GMT" if inverted == 0 else f"Etc/GMT{inverted:+d}"
 
 
+def _tz_matches_offset(tz_name: str, parsed: datetime | None) -> bool:
+    """Whether `tz_name`'s real offset at `parsed` equals `parsed`'s own offset.
+
+    A declared `timeZone` and the offset inside `dateTime` describe the same
+    instant twice. When they disagree, the declaration is wrong about the
+    data it labels and must not be trusted (#284).
+
+    Unknown when `parsed` is None or the zone is unresolvable — reported as a
+    match so the caller keeps the declared name rather than discarding it on
+    a check that could not run.
+    """
+    if parsed is None:
+        return True
+    try:
+        declared = parsed.astimezone(ZoneInfo(tz_name)).utcoffset()
+    except (ZoneInfoNotFoundError, ValueError):
+        return True
+    return declared == parsed.utcoffset()
+
+
 def _extract_timezone(block: object) -> str | None:
     """The IANA `timeZone` for a start/end block, with an offset fallback.
 
@@ -327,13 +348,25 @@ def _extract_timezone(block: object) -> str | None:
     block omits it but its `dateTime` carries an offset, fall back to a
     fixed-offset `Etc/GMT±N` zone so the instant is still anchored. Returns None
     only when neither is available.
+
+    A declared `timeZone` that CONTRADICTS its own `dateTime` offset is not
+    trusted (#284). Luma/Partiful-style imports write a local wall-clock but
+    stamp `timeZone: "UTC"`, and the resulting string is valid IANA, so the
+    unresolvable-zone fallback in `_start_in_local` never trips — it renders
+    the operator notice faithfully in the wrong zone (a 09:00 PDT meeting
+    announced as 16:00). When the declaration disagrees with the offset the
+    same block carries, derive the zone from the offset instead; the declared
+    name is kept only when no `Etc/GMT±N` maps (a non-whole-hour offset),
+    since a wrong name still beats no zone at all.
     """
     if not isinstance(block, dict):
         return None
     tz = block.get("timeZone")
-    if isinstance(tz, str) and tz:
-        return tz
     parsed, _ = _parse_dt(block)
+    if isinstance(tz, str) and tz:
+        if _tz_matches_offset(tz, parsed):
+            return tz
+        return _etc_zone(parsed) or tz
     return _etc_zone(parsed)
 
 

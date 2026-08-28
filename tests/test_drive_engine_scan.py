@@ -25,6 +25,7 @@ from scan import (  # noqa: E402
     MeetingClass,
     ScanError,
     TransitLeg,
+    _extract_timezone,
     actionable,
     flight_codes,
     scan,
@@ -911,3 +912,68 @@ def test_default_anchor_is_home():
     results = scan([event], now=NOW, home_address=HOME)
     assert results[0].legs[0].origin == HOME
     assert results[0].legs[-1].destination == HOME
+
+
+# --- #284: a declared timeZone that contradicts its own dateTime offset ----
+
+
+def _tz_block(dt: str, tz: str | None = None) -> dict:
+    b: dict = {"dateTime": dt}
+    if tz is not None:
+        b["timeZone"] = tz
+    return b
+
+
+def test_extract_timezone_distrusts_a_timezone_contradicting_its_offset():
+    """The #284 live event. A Luma/Partiful-style import wrote a Pacific
+    wall-clock and stamped `timeZone: "UTC"`. "UTC" is valid IANA, so the
+    unresolvable-zone fallback never trips and the notice renders the
+    meeting faithfully in the wrong zone — 09:00 PDT announced as 16:00."""
+    assert _extract_timezone(_tz_block("2026-08-22T09:00:00-07:00", "UTC")) == "Etc/GMT+7"
+
+
+def test_extract_timezone_keeps_a_timezone_agreeing_with_its_offset():
+    """The overwhelmingly common case must be untouched: a real Google event
+    whose IANA name and offset describe the same instant. -05:00 is what
+    America/Chicago is on that August date (CDT), so the name is kept."""
+    assert (
+        _extract_timezone(_tz_block("2026-08-22T09:00:00-05:00", "America/Chicago"))
+        == "America/Chicago"
+    )
+
+
+def test_extract_timezone_keeps_genuine_utc():
+    """A zero offset declared as UTC is not a contradiction."""
+    assert _extract_timezone(_tz_block("2026-08-22T16:00:00+00:00", "UTC")) == "UTC"
+
+
+def test_extract_timezone_keeps_dst_correct_names_across_the_boundary():
+    """The check compares the zone's offset AT THAT INSTANT, not a fixed
+    one, so the same IANA name survives on both sides of a DST change."""
+    assert (
+        _extract_timezone(_tz_block("2026-01-15T09:00:00-06:00", "America/Chicago"))
+        == "America/Chicago"
+    )  # CST
+    assert (
+        _extract_timezone(_tz_block("2026-07-15T09:00:00-05:00", "America/Chicago"))
+        == "America/Chicago"
+    )  # CDT
+
+
+def test_extract_timezone_falls_back_to_offset_when_no_timezone_declared():
+    """Unchanged pre-existing behaviour: no `timeZone`, derive from offset."""
+    assert _extract_timezone(_tz_block("2026-08-22T09:00:00-07:00")) == "Etc/GMT+7"
+
+
+def test_extract_timezone_keeps_an_unresolvable_name_it_cannot_check():
+    """A name ZoneInfo cannot resolve leaves the comparison unable to run.
+    Keep the declared name rather than discarding it on a check that did
+    not happen — `_start_in_local` already falls back to UTC for it."""
+    assert _extract_timezone(_tz_block("2026-08-22T09:00:00-07:00", "Mars/Phobos")) == "Mars/Phobos"
+
+
+def test_extract_timezone_keeps_the_declared_name_when_no_etc_zone_maps():
+    """A contradicting declaration with a non-whole-hour offset has no
+    `Etc/GMT±N` to fall back to. A wrong name still beats no zone at all,
+    so the declaration is kept rather than returning None."""
+    assert _extract_timezone(_tz_block("2026-08-22T09:00:00+05:30", "UTC")) == "UTC"
