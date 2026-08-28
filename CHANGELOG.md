@@ -6,13 +6,15 @@ A meeting-drive notice announced a 09:00 PDT San Francisco event as **16:00**. T
 
 `_extract_timezone` took `start.timeZone` verbatim, so `DesiredBlock.timezone` became `"UTC"` and `_start_in_local` rendered the instant in UTC. The unresolvable-zone fallback that exists for exactly this shape never tripped, because `"UTC"` is a perfectly valid IANA name — the fallback was built for a *missing or invalid* zone, and this one is valid-but-wrong. It rendered faithfully in the wrong zone.
 
-The declaration and the offset describe the same instant twice, so a disagreement between them is self-evident: `_tz_matches_offset` resolves the declared name at that instant and compares its real UTC offset against the one the `dateTime` carries. On a mismatch the zone is derived from the offset instead (`Etc/GMT±N`, the same fallback the no-`timeZone` path already uses). Comparing at the instant rather than against a fixed offset means a correct name survives a DST boundary — `America/Chicago` is kept at both `-06:00` in January and `-05:00` in July.
+The declaration and the offset describe the same instant twice, so a disagreement between them is self-evident: `_tz_is_trustworthy` resolves the declared name at that instant and compares its real UTC offset against the one the `dateTime` carries. On a mismatch the zone is derived from the offset instead (`Etc/GMT±N`, the same fallback the no-`timeZone` path already uses). Comparing at the instant rather than against a fixed offset means a correct name survives a DST boundary — `America/Chicago` is kept at both `-06:00` in January and `-05:00` in July.
 
 An unresolvable declared name is treated the same as a contradicting one. The first draft kept it, reasoning that a check which could not run is not evidence of a contradiction — but `_start_in_local` cannot resolve it either and falls back to UTC, which reproduces the exact wrong-time notice. Review caught it; `coding-policy: error-handling` Graceful Fallback says try the available alternative before failing, and the offset is available.
 
 The declared name survives in exactly two cases: it agrees with its offset (the overwhelmingly common case), or it is untrustworthy but the offset is not a whole hour so no `Etc/GMT±N` maps — a wrong name still beats no zone at all.
 
 Verified end to end on the incident's instant: `Sat Aug 22, 16:00` becomes `Sat Aug 22, 09:00`.
+
+The regression suite drives the public `scan()` API and asserts the `timezone` it puts on the returned `MeetingClass` — the value `calendar_apply` renders the notice from, so an outcome rather than an internal. An earlier draft asserted the private `_extract_timezone` directly, which `coding-policy: testing-standards` rejects: an internal refactor would have broken those tests without changing behaviour. The render step stays `calendar_apply`'s to cover; reaching into `_start_in_local` from here would have traded one private-helper assertion for another.
 
 Not fixed here: `#285`, the notice-rewrite bug that co-surfaced in the same message. That one needs a delivery path that does not pass the rendered string through a model, and no such path exists in this plugin — every skill here routes chat through the agent's `mcp__nanoclaw__send_message`. It is host work.
 
