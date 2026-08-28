@@ -14,6 +14,7 @@ import sys
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -911,3 +912,118 @@ def test_default_anchor_is_home():
     results = scan([event], now=NOW, home_address=HOME)
     assert results[0].legs[0].origin == HOME
     assert results[0].legs[-1].destination == HOME
+
+
+# --- #284: a declared timeZone that contradicts its own dateTime offset ----
+#
+# Asserted through the public `scan()` API and the timezone it puts on the
+# returned MeetingClass — that value is what `calendar_apply` renders the
+# operator notice from, so it is the outcome, not an internal. The render
+# itself is calendar_apply's to test: reaching into `_start_in_local` here
+# would trade one private-helper assertion for another.
+#
+# `Etc/GMT+7` is the POSIX-inverted spelling of UTC-07:00, so a block
+# carrying it renders the 16:00Z instant as the 09:00 the invite meant.
+
+
+def _tz_meeting(dt_iso: str, tz: str | None) -> dict:
+    """A future timed meeting whose start block carries an explicit offset
+    in `dateTime` and, optionally, a separately-declared `timeZone`."""
+    start_block: dict = {"dateTime": dt_iso}
+    end_block: dict = {
+        "dateTime": (datetime.fromisoformat(dt_iso) + timedelta(hours=1)).isoformat()
+    }
+    if tz is not None:
+        start_block["timeZone"] = tz
+        end_block["timeZone"] = tz
+    return {
+        "id": "tz1",
+        "summary": "Zero Downtime Hackathon",
+        "description": "",
+        "location": "625 2nd St, San Francisco, CA 94107",
+        "start": start_block,
+        "end": end_block,
+    }
+
+
+def _scanned_tz(dt_iso: str, tz: str | None, *, now: datetime = NOW) -> str | None:
+    [result] = scan([_tz_meeting(dt_iso, tz)], now=now, home_address=HOME)
+    return result.timezone
+
+
+def test_scan_distrusts_a_timezone_contradicting_its_offset():
+    """The #284 live event. A Luma/Partiful-style import wrote a Pacific
+    wall-clock and stamped `timeZone: "UTC"`. "UTC" is valid IANA, so the
+    unresolvable-zone fallback never trips and the notice renders the
+    meeting faithfully in the wrong zone — 09:00 PDT announced as 16:00."""
+    assert _scanned_tz("2026-08-22T09:00:00-07:00", "UTC") == "Etc/GMT+7"
+
+
+def test_scan_keeps_a_timezone_agreeing_with_its_offset():
+    """The overwhelmingly common case must be untouched: a real Google event
+    whose IANA name and offset describe the same instant. -05:00 is what
+    America/Chicago is on that August date (CDT), so the name is kept."""
+    assert _scanned_tz("2026-08-22T09:00:00-05:00", "America/Chicago") == "America/Chicago"
+
+
+def test_scan_keeps_genuine_utc():
+    """A zero offset declared as UTC is not a contradiction."""
+    assert _scanned_tz("2026-08-22T16:00:00+00:00", "UTC") == "UTC"
+
+
+def test_scan_keeps_dst_correct_names_across_the_boundary():
+    """The check compares the zone's offset AT THAT INSTANT, not a fixed
+    one, so the same IANA name survives on both sides of a DST change.
+
+    Both instants are derived from the pinned `NOW` by fixed offsets, so
+    neither is a future-date literal (`coding-policy: testing-standards`
+    Determinism). The winter case needs its own injected clock too:
+    `scan` filters a meeting starting before the `now` it is given, so a
+    January meeting cannot be scanned against a July `now`."""
+    # The module-level `CT` is a FIXED -05:00 offset, so it can never
+    # express CST. This test needs the real DST-aware zone.
+    chicago = ZoneInfo("America/Chicago")
+    winter_now = (NOW - timedelta(days=180)).astimezone(chicago)  # early Jan
+    winter_meeting = (winter_now + timedelta(days=13)).astimezone(chicago)
+    assert winter_meeting.utcoffset() == timedelta(hours=-6)  # CST, not CDT
+    assert (
+        _scanned_tz(winter_meeting.isoformat(), "America/Chicago", now=winter_now)
+        == "America/Chicago"
+    )
+
+    summer_meeting = (NOW + timedelta(days=14)).astimezone(chicago)  # mid-July
+    assert summer_meeting.utcoffset() == timedelta(hours=-5)  # CDT
+    assert _scanned_tz(summer_meeting.isoformat(), "America/Chicago") == "America/Chicago"
+
+
+def test_scan_falls_back_to_offset_when_no_timezone_declared():
+    """Unchanged pre-existing behaviour: no `timeZone`, derive from offset."""
+    assert _scanned_tz("2026-08-22T09:00:00-07:00", None) == "Etc/GMT+7"
+
+
+def test_scan_prefers_the_offset_over_an_unresolvable_name():
+    """An unresolvable name is not merely uncheckable, it is unusable:
+    `_start_in_local` cannot resolve it either and falls back to UTC,
+    rendering the 09:00 PDT meeting as 16:00 — the very bug this guard
+    exists to stop. Caught in review; the first draft kept the name."""
+    assert _scanned_tz("2026-08-22T09:00:00-07:00", "Mars/Phobos") == "Etc/GMT+7"
+
+
+def test_scan_keeps_an_unresolvable_name_with_no_etc_mapping():
+    """The one case where an unresolvable name survives: a non-whole-hour
+    offset has no `Etc/GMT±N` to fall back to, so there is nothing better
+    to offer."""
+    assert _scanned_tz("2026-08-22T09:00:00+05:30", "Mars/Phobos") == "Mars/Phobos"
+
+
+def test_scan_survives_a_boundary_datetime_that_overflows_conversion():
+    """`_parse_event`'s contract is that one malformed event never aborts a
+    wide-window sweep. `0001-01-01T00:00:00+14:00` is syntactically valid,
+    but converting it into a named zone walks past `datetime.min` and
+    raises OverflowError — so the trust check treats it as untrustworthy
+    rather than letting it propagate and kill the scan. Caught in review."""
+    events = [_tz_meeting("0001-01-01T00:00:00+14:00", "America/Chicago")]
+    [result] = scan(events, now=NOW, home_address=HOME)
+    # The event is millennia in the past, so it buckets as `past` — the
+    # point is that the sweep reaches a verdict at all instead of raising.
+    assert result.bucket == "past"
