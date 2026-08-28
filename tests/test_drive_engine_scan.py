@@ -965,11 +965,20 @@ def test_extract_timezone_falls_back_to_offset_when_no_timezone_declared():
     assert _extract_timezone(_tz_block("2026-08-22T09:00:00-07:00")) == "Etc/GMT+7"
 
 
-def test_extract_timezone_keeps_an_unresolvable_name_it_cannot_check():
-    """A name ZoneInfo cannot resolve leaves the comparison unable to run.
-    Keep the declared name rather than discarding it on a check that did
-    not happen — `_start_in_local` already falls back to UTC for it."""
-    assert _extract_timezone(_tz_block("2026-08-22T09:00:00-07:00", "Mars/Phobos")) == "Mars/Phobos"
+def test_extract_timezone_prefers_the_offset_over_an_unresolvable_name():
+    """An unresolvable name is not merely uncheckable, it is unusable:
+    `_start_in_local` cannot resolve it either and falls back to UTC,
+    rendering the 09:00 PDT meeting as 16:00 — the very bug this guard
+    exists to stop. Prefer the offset-derived zone. Caught in review;
+    the first draft kept the name here."""
+    assert _extract_timezone(_tz_block("2026-08-22T09:00:00-07:00", "Mars/Phobos")) == "Etc/GMT+7"
+
+
+def test_extract_timezone_keeps_an_unresolvable_name_with_no_etc_mapping():
+    """The one case where an unresolvable name survives: a non-whole-hour
+    offset has no `Etc/GMT±N` to fall back to, so there is nothing better
+    to offer."""
+    assert _extract_timezone(_tz_block("2026-08-22T09:00:00+05:30", "Mars/Phobos")) == "Mars/Phobos"
 
 
 def test_extract_timezone_keeps_the_declared_name_when_no_etc_zone_maps():

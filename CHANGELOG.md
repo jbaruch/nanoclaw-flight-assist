@@ -8,7 +8,9 @@ A meeting-drive notice announced a 09:00 PDT San Francisco event as **16:00**. T
 
 The declaration and the offset describe the same instant twice, so a disagreement between them is self-evident: `_tz_matches_offset` resolves the declared name at that instant and compares its real UTC offset against the one the `dateTime` carries. On a mismatch the zone is derived from the offset instead (`Etc/GMT±N`, the same fallback the no-`timeZone` path already uses). Comparing at the instant rather than against a fixed offset means a correct name survives a DST boundary — `America/Chicago` is kept at both `-06:00` in January and `-05:00` in July.
 
-Three cases deliberately keep the declared name: one that agrees with its offset (the overwhelmingly common case), one whose zone `ZoneInfo` cannot resolve (the comparison could not run, so it is not evidence of a contradiction), and a contradicting one whose offset is not a whole hour and has no `Etc/GMT±N` to map to — a wrong name still beats no zone at all.
+An unresolvable declared name is treated the same as a contradicting one. The first draft kept it, reasoning that a check which could not run is not evidence of a contradiction — but `_start_in_local` cannot resolve it either and falls back to UTC, which reproduces the exact wrong-time notice. Review caught it; `coding-policy: error-handling` Graceful Fallback says try the available alternative before failing, and the offset is available.
+
+The declared name survives in exactly two cases: it agrees with its offset (the overwhelmingly common case), or it is untrustworthy but the offset is not a whole hour so no `Etc/GMT±N` maps — a wrong name still beats no zone at all.
 
 Verified end to end on the incident's instant: `Sat Aug 22, 16:00` becomes `Sat Aug 22, 09:00`.
 
