@@ -8,7 +8,7 @@ The sweep rendered the operator notice deterministically and then woke a Haiku a
 
 Silent sweeps are unchanged — `message` is `None` and the host's delivery branch requires a non-empty string, so the outcome matches what the old wake gate produced. A notice fire now costs zero model tokens instead of a Haiku spawn.
 
-The relay step is gone from SKILL.md, and the remaining steps renumber 2–4 → 1–3. `check-travel-bookings`' cross-reference to the drive-or-fly step moved from Step 3 to Step 2 in lock-step. The operator's `skip` / `drive` / `fly` replies are inbound-triggered and wake normally, untouched.
+The relay step is gone from SKILL.md, and the remaining steps renumber 2–4 → 1–3. The `description:` frontmatter moves with it — it still promised the sweep would wake you, which is the discovery surface an agent reads first, and the repo's 1024-character limit test caught the first rewrite at 1033. `build_sweep_payload`'s docstring had the same drift: its opening still described the old wake gate while a later paragraph described the new one, and SKILL.md names that docstring authoritative. `check-travel-bookings`' cross-reference to the drive-or-fly step moved from Step 3 to Step 2 in lock-step. The operator's `skip` / `drive` / `fly` replies are inbound-triggered and wake normally, untouched.
 
 Five tests asserted `wake_agent is True` to mean "the sweep has something to say". That is now expressed by `data.message` being present, so they assert the message and the no-wake invariant rather than flipping to an assertion that would pass trivially; two whose names described the wake are renamed.
 

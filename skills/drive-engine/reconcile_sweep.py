@@ -408,14 +408,18 @@ def render_notification(
 def build_sweep_payload(
     applied, skipped: list[str], drive_or_fly_questions: list[str] | None = None
 ) -> dict:
-    """Assemble the sweep's stdout payload and wake decision from an ApplyResult.
+    """Assemble the sweep's stdout payload from an ApplyResult.
 
-    Wakes the agent ONLY when the operator has something to act on: a new MEETING
-    drive (which they can skip), a MATERIAL drive-time change (leave earlier /
-    later), or a drive-or-fly question about a flight-less trip. Removes,
-    airport-drive adds, lodging-drive adds, converts, and routine sub-threshold
-    re-times all apply SILENTLY — no wake, no message (the noise this gating
-    exists to kill). `applied` is a `calendar_apply.ApplyResult`.
+    `wake_agent` is always False: the sweep never wakes an agent. The host
+    delivers `data.message` verbatim off that branch (#285).
+
+    A notice is emitted ONLY when the operator has something to act on: a new
+    MEETING drive (which they can skip), a MATERIAL drive-time change (leave
+    earlier / later), or a drive-or-fly question about a flight-less trip.
+    Removes, airport-drive adds, lodging-drive adds, converts, and routine
+    sub-threshold re-times all apply SILENTLY — no message, so the host stays
+    quiet (the noise this gating exists to kill). `applied` is a
+    `calendar_apply.ApplyResult`.
 
     A lodging drive is silent for the same reason an airport drive is: it is not
     skippable. Getting to the trip is the trip.
@@ -425,11 +429,8 @@ def build_sweep_payload(
     string and none can rewrite it. The key is always present; its value is the
     notice string when there is something to say, and `None` otherwise.
 
-    `wake_agent` is therefore always False on a cadence sweep. It used to be True
-    whenever there was a notice, purely so an agent could relay `data.message` —
-    and the Haiku wake container rewrote it anyway, turning a drive-by-default
-    line into a false binary. The relay step is gone; the operator's `skip` /
-    `drive` / `fly` replies are inbound-triggered and still wake normally."""
+    The operator's `skip` / `drive` / `fly` replies are inbound-triggered and
+    wake normally; only this cadence path is silent."""
     added = _group_meeting_adds(applied.added_meeting_legs)
     material = _dedup_material(applied.material_updates)
     questions = list(drive_or_fly_questions or [])

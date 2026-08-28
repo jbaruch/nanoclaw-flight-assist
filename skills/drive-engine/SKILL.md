@@ -1,6 +1,6 @@
 ---
 name: drive-engine
-description: "The unified drive-block engine: manages the travel-time / driving blocks on your primary calendar from one place — the drives to your flights, the drives to your in-person meetings, and the drive to a trip you drive to rather than fly. On a schedule it plans all three, diffs them against the blocks already there, and applies the changes — adding, updating, and removing its own blocks — suppressing drives you can't make (an airport reached by a connection, a home meeting while you're travelling). Use when the user asks about drive blocks, driving time, commute or travel-time blocks on their calendar, or drives to the airport, to a meeting, or to a hotel; when the operator replies to a drive notification to skip a meeting drive ('skip', 'skip 1', 'skip 2 and 3', 'skip the Massage drive'); when the operator says whether a trip is a drive or a flight ('drive', 'fly'). Also runs on its own schedule, waking you only for a skippable meeting drive, a material drive-time change, or a drive-or-fly question."
+description: "The unified drive-block engine: manages the travel-time / driving blocks on your primary calendar from one place — the drives to your flights, the drives to your in-person meetings, and the drive to a trip you drive to rather than fly. On a schedule it plans all three, diffs them against the blocks already there, and applies the changes — adding, updating, and removing its own blocks — suppressing drives you can't make (an airport reached by a connection, a home meeting while you're travelling). Use when the user asks about drive blocks, driving time, commute or travel-time blocks on their calendar, or drives to the airport, to a meeting, or to a hotel; when the operator replies to a drive notification to skip a meeting drive ('skip', 'skip 1', 'skip 2 and 3', 'skip the Massage drive'); when the operator says whether a trip is a drive or a flight ('drive', 'fly'). Also runs on its own schedule; that sweep delivers its notice without waking you, so only an operator reply activates a step."
 cadence: "*/30 * * * *"
 agentModel: "claude-haiku-4-5-20251001"
 script: "reconcile_sweep.py"
@@ -12,13 +12,7 @@ This skill is an action router — pick the step that matches the situation and 
 
 The precheck (`reconcile_sweep.py`) plans and applies every `Drive:` block change — airport, meeting, and lodging drives — every ~30 minutes, diffing against the calendar and touching only its own blocks. It leaves legacy drive-planner / flight-assist blocks alone (you clean those up). Its contract — inputs, apply counts, the fail-closed no-wake payload on error, and the wake gating — lives in `reconcile_sweep.py` (module docstring, `build_sweep_payload`) and `calendar_apply.apply_plan`. Do not restate its logic here.
 
-## The cadence sweep needs no step
-
-The precheck applies every `Drive:` block change and renders the operator notice itself. The host delivers that notice verbatim off the sweep's `wake_agent: false` branch — no agent is spawned for it, so there is nothing to relay and no way to rewrite it (#285).
-
-Earlier versions woke an agent whose only instruction was to send `data.message` unchanged. The wake model composed its own text instead, turning a drive-by-default line into a false binary. Prose could not hold it; taking the model out of the delivery path did.
-
-The steps below are the operator's replies to that notice. They are inbound-triggered and wake normally.
+The cadence sweep activates no step. Its precheck renders the operator notice and returns `wake_agent: false`; the host delivers `data.message` verbatim, so nothing here relays it (#285). The steps below are the operator's replies to that notice, and they wake normally.
 
 ## Step 1 — Skip a meeting drive the operator declined
 
