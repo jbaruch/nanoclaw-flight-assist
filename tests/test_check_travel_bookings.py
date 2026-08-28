@@ -239,6 +239,49 @@ def test_classify_trip_empty(check_travel_bookings):
     assert out["has_transport"] is False
 
 
+def test_classify_trip_empty_underway_has_no_bookable_window(check_travel_bookings):
+    """#286: the trip started 6 days ago and ends tomorrow. It really is
+    empty, so `is_empty` stays true — but there is nothing left to book,
+    which is what the alert gates on."""
+    module, *_ = check_travel_bookings
+    out = module.classify_trip(
+        items=[],
+        trip_start=_FROZEN_TODAY - timedelta(days=6),
+        trip_end=_FROZEN_TODAY + timedelta(days=1),
+        today=_FROZEN_TODAY,
+    )
+    assert out["is_empty"] is True
+    assert out["has_bookable_window"] is False
+
+
+def test_classify_trip_empty_future_still_has_a_bookable_window(check_travel_bookings):
+    """The signal this check exists for must survive: a FUTURE empty
+    away-trip still has a window, so it still surfaces (#271)."""
+    module, *_ = check_travel_bookings
+    out = module.classify_trip(
+        items=[],
+        trip_start=_FROZEN_TODAY + timedelta(days=5),
+        trip_end=_FROZEN_TODAY + timedelta(days=8),
+        today=_FROZEN_TODAY,
+    )
+    assert out["is_empty"] is True
+    assert out["has_bookable_window"] is True
+
+
+def test_classify_trip_empty_starting_today_has_no_bookable_window(check_travel_bookings):
+    """The boundary. A trip whose first day is today has already begun;
+    `today < trip_start` is false, so the window is closed."""
+    module, *_ = check_travel_bookings
+    out = module.classify_trip(
+        items=[],
+        trip_start=_FROZEN_TODAY,
+        trip_end=_FROZEN_TODAY + timedelta(days=3),
+        today=_FROZEN_TODAY,
+    )
+    assert out["is_empty"] is True
+    assert out["has_bookable_window"] is False
+
+
 def test_classify_trip_transport_without_lodging(check_travel_bookings):
     """Has flight, no lodging → uncovered_nights covers every
     non-travel night BEFORE the last transport (tail-end home-nights
@@ -1837,6 +1880,53 @@ def test_away_trip_with_nothing_booked_still_fires(
     output = json.loads(out)
     assert [gap["issue"] for gap in output["gaps"]] == ["ничего не забукано"]
     assert output["local_trips"] == 0
+
+
+def test_underway_empty_away_trip_raises_no_gap(
+    check_travel_bookings, tmp_path, monkeypatch, capsys
+):
+    """#286: the live false positive. "Onboarding CA 2026 (Aug 17-24)" was
+    flagged "nothing booked" on Aug 23 — the traveller had been in San
+    Francisco for six days and was flying home the next day. Bookings were
+    made out of band. Nagging about a trip that is all but over is noise;
+    there is nothing left to book."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN")
+    trip = _trip_record(
+        summary="Onboarding CA 2026",
+        start=_FROZEN_TODAY - timedelta(days=6),
+        end=_FROZEN_TODAY + timedelta(days=1),
+        days={},
+    )
+    trip["destination"] = "San Francisco, CA"
+    db_path.write_text(json.dumps(_db_payload({"onboarding-ca-2026-08": trip})))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert output["gaps"] == []
+
+
+def test_empty_away_trip_starting_today_raises_no_gap(
+    check_travel_bookings, tmp_path, monkeypatch, capsys
+):
+    """The boundary: departure day. The window closes when the trip starts,
+    not when it ends, so today's departure is already too late to book."""
+    module, db_path, _ = check_travel_bookings
+    _write_home_metro(tmp_path, "Nashville, TN")
+    trip = _trip_record(
+        summary="Oslo",
+        start=_FROZEN_TODAY,
+        end=_FROZEN_TODAY + timedelta(days=3),
+        days={},
+    )
+    trip["destination"] = "Oslo, Norway"
+    db_path.write_text(json.dumps(_db_payload({"oslo-2026": trip})))
+
+    code, out, _ = _run(module, monkeypatch, capsys)
+    assert code == 0
+    output = json.loads(out)
+    assert output["gaps"] == []
 
 
 def test_unlabelled_trip_still_fires(check_travel_bookings, tmp_path, monkeypatch, capsys):
